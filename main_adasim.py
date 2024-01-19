@@ -35,6 +35,7 @@ import utils
 import vision_transformer as vits
 from vision_transformer import DINOHead
 from adasim_utils.parser import get_args_parser
+import igraph as ig
 
 torchvision_archs = sorted(name for name in torchvision_models.__dict__
                            if name.islower() and not name.startswith("__")
@@ -77,6 +78,9 @@ def train_adasim(args):
 
         args.data_path = os.path.join(args.untar_path, 'ilsvrc2012', 'ILSVRC2012_img_train')
         args.data_path_val = os.path.join(args.untar_path, 'ilsvrc2012', 'ILSVRC2012_img_val')
+    else:
+        args.data_path = os.path.join(args.untar_path, 'train')
+        args.data_path_val = os.path.join(args.untar_path, 'test')
 
     torch.distributed.barrier()
 
@@ -152,6 +156,8 @@ def train_adasim(args):
     nn_matrix_cpu = torch.zeros(len(data_loader.dataset), args.vote_nn_nb, args.topk, dtype=torch.long)
     sim_matrix_cpu = torch.zeros(len(data_loader.dataset), args.vote_nn_nb, args.topk, dtype=torch.float)
 
+    graph = ig.Graph(n=len(data_loader.dataset), directed=True)
+
     # ============ preparing loss ... ============
     adasim_loss = AdaSimLoss(
         args.out_dim,
@@ -198,7 +204,8 @@ def train_adasim(args):
                   'sim_tensor_cpu': sim_tensor_cpu,
                   'features_cpu': features_cpu,
                   "nn_matrix_cpu": nn_matrix_cpu,
-                  "sim_matrix_cpu": sim_matrix_cpu}
+                  "sim_matrix_cpu": sim_matrix_cpu,
+                  "graph":graph}
     default_checkpoint_path = os.path.join(args.output_dir, "checkpoint.pth")
     if not os.path.isfile(default_checkpoint_path) and os.path.isfile(args.start_checkpoint_path):
         utils.master_copy_from_to(args.start_checkpoint_path, default_checkpoint_path)
@@ -214,6 +221,7 @@ def train_adasim(args):
             optimizer=optimizer,
             fp16_scaler=fp16_scaler,
             adasim_loss=adasim_loss,
+            # graph = graph
         )
     except:
         # If checkpoint is corrupted, used backedup checkpoint
@@ -225,6 +233,7 @@ def train_adasim(args):
             optimizer=optimizer,
             fp16_scaler=fp16_scaler,
             adasim_loss=adasim_loss,
+            # graph = graph
         )
     start_epoch = to_restore["epoch"]
     features_cpu = to_restore["features_cpu"]
@@ -232,6 +241,7 @@ def train_adasim(args):
     sim_tensor_cpu = to_restore["sim_tensor_cpu"]
     nn_matrix_cpu = to_restore["nn_matrix_cpu"]
     sim_matrix_cpu = to_restore["sim_matrix_cpu"]
+    graph = to_restore["graph"]
     nn_matrix_cpu = nn_matrix_cpu[:, -args.vote_nn_nb:]
     sim_matrix_cpu = sim_matrix_cpu[:, -args.vote_nn_nb:]
 
@@ -249,13 +259,21 @@ def train_adasim(args):
         if epoch >= args.vote_nn_nb:
             data_loader.dataset.nn_matrix_cpu = nn_matrix_cpu
             data_loader.dataset.sim_matrix_cpu = sim_matrix_cpu
+            data_loader.dataset.graph = graph
+            adj = graph.get_adjacency()
+            print(sum(sum(sublist) for sublist in adj.data))
+            vertex_labels = [str(index) for index in range(graph.vcount())]
+            # Save the igraph plot to a temporary file with vertex labels
+            temp_file = 'temp_graph_with_labels.png'
+            ig.plot(graph, target=temp_file, vertex_label=vertex_labels)
+            
         try:
             # ============ training one epoch of DINO ... ============
 
             train_stats = train_one_epoch(student, teacher, teacher_without_ddp, adasim_loss,
                                           data_loader, optimizer, lr_schedule, wd_schedule, momentum_schedule,
                                           epoch, fp16_scaler, features, nn_tensor, sim_tensor, bootstrap_myself_tensor,
-                                          args)
+                                          graph, args)
             nn_tensor_cpu = nn_tensor.cpu()
             sim_tensor_cpu = sim_tensor.cpu()
             features_cpu = features.cpu()
@@ -280,7 +298,8 @@ def train_adasim(args):
             'sim_tensor_cpu': sim_tensor_cpu,
             'features_cpu': features_cpu,
             'nn_matrix_cpu': nn_matrix_cpu,
-            'sim_matrix_cpu': sim_matrix_cpu
+            'sim_matrix_cpu': sim_matrix_cpu,
+            'graph':graph
         }
         if fp16_scaler is not None:
             save_dict['fp16_scaler'] = fp16_scaler.state_dict()
@@ -367,11 +386,19 @@ def update_state(teacher_output, indices_local, features, nn_tensor, sim_tensor,
 
 def train_one_epoch(student, teacher, teacher_without_ddp, adasim_loss, data_loader,
                     optimizer, lr_schedule, wd_schedule, momentum_schedule, epoch,
-                    fp16_scaler, features, nn_tensor, sim_tensor, bootstrap_myself_tensor, args):
+                    fp16_scaler, features, nn_tensor, sim_tensor, bootstrap_myself_tensor, graph, args):
     metric_logger = utils.MetricLogger(delimiter="  ")
     header = 'Epoch: [{}/{}]'.format(epoch, args.epochs)
 
-    for it, (images, indices, same_im_bool) in enumerate(metric_logger.log_every(data_loader, 10, header)):
+    for it, (images, indices, same_im_bool, neighbors) in enumerate(metric_logger.log_every(data_loader, 10, header)):
+        #update graph:
+        if neighbors !=[]:
+            edge_list_updates = []
+            for i in range(len(indices)):
+                for j in range(neighbors.shape[1]):
+                    edge_list_updates.append((indices[i],neighbors[i,j]))
+            graph.add_edges(edge_list_updates)
+
         # update weight decay and learning rate according to their schedule
         it = len(data_loader) * epoch + it  # global training iteration
         for i, param_group in enumerate(optimizer.param_groups):

@@ -4,7 +4,7 @@ import torch
 from collections import defaultdict
 from collections import OrderedDict
 import torch.nn.functional as FF
-
+# from main_adasim import graph
 
 class DatasetFolderAdaSim(DatasetFolder):
     def __init__(
@@ -27,6 +27,7 @@ class DatasetFolderAdaSim(DatasetFolder):
         self.imgs = self.samples
         self.nn_matrix_cpu = None
         self.sim_matrix_cpu = None
+        # self.graph = None
 
     def __getitem__(self, index: int):
         """
@@ -38,11 +39,19 @@ class DatasetFolderAdaSim(DatasetFolder):
         """
         path, target = self.samples[index]
         sample = self.loader(path)
+        neighbors= []
 
         if self.nn_matrix_cpu is not None:
             # ~ 50 x 10 (vote_nn x topk)
             current_sim = self.sim_matrix_cpu[index]
             current_nn = self.nn_matrix_cpu[index]
+
+            # Update the Graph
+            neighbors = current_nn[-1, :self.args.topk]
+            # edge_list_updates = []
+            # for i in range(self.args.topk):
+            #     edge_list_updates.append(current_nn[-1, i])
+            # graph.add_edges(edge_list_updates)
 
             # Get sum of similarities for each index
             dict_lst = [defaultdict(float, zip(current_nn[n].tolist(), current_sim[n].tolist())) for n in
@@ -77,7 +86,7 @@ class DatasetFolderAdaSim(DatasetFolder):
         if self.return_index_instead_of_target:
             target = index
 
-        return sample, target, same_im
+        return sample, target, same_im, neighbors
 
 
 class ImageNetReturnPath(ImageFolder):
