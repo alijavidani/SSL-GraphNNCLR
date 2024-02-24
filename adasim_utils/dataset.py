@@ -4,6 +4,7 @@ import torch
 from collections import defaultdict
 from collections import OrderedDict
 import torch.nn.functional as FF
+import os
 # from main_adasim import graph
 
 class DatasetFolderAdaSim(DatasetFolder):
@@ -83,10 +84,10 @@ class DatasetFolderAdaSim(DatasetFolder):
         if self.target_transform is not None:
             target = self.target_transform(target)
 
-        if self.return_index_instead_of_target:
-            target = index
-
-        return sample, target, same_im, neighbors
+        # if self.return_index_instead_of_target:
+        #     target = index
+        image_name = os.path.splitext(os.path.basename(path))[0]
+        return sample, target, same_im, neighbors, index, image_name
 
 
 class ImageNetReturnPath(ImageFolder):

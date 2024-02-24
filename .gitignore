@@ -2,3 +2,6 @@ output/
 output2/
 .idea/
 data/
+Citeseer/
+*.pyc
+\__pycache__\*

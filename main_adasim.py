@@ -84,6 +84,43 @@ def train_adasim(args):
 
     torch.distributed.barrier()
 
+    dataset_graph = DatasetFolderAdaSim(args.data_path, args, transform=transform, return_index_instead_of_target=False)
+    sampler_graph = torch.utils.data.DistributedSampler(dataset_graph, shuffle=True)
+
+    data_loader_graph = torch.utils.data.DataLoader(
+        dataset_graph,
+        sampler=sampler_graph,
+        batch_size=args.batch_size_per_gpu,
+        num_workers=args.num_workers,
+        pin_memory=True,
+        drop_last=True,
+    )
+    print(f"Data loaded: there are {len(dataset_graph)} images.")
+    
+
+    # Filename to check and write to
+    filename = f"index_label_image_{os.path.split(args.untar_path)[1]}.txt"
+
+    # Check if the file exists
+    if not os.path.exists(filename):
+        # If the file does not exist, execute the code and write the results
+        index_label_image = [None] * len(dataset_graph)
+
+        for it, (image, label, same_im, neighbors, index, image_name_list) in enumerate(data_loader_graph):
+            index_list = index.tolist()
+            label_list = label.tolist()
+            for index, label, image_name in zip(index_list, label_list, image_name_list):
+                index_label_image[index] = str(label)# + '_' + image_name
+
+        # Write the results to the file
+        with open(filename, 'w') as file:
+            for item in index_label_image:
+                file.write("%s\n" % item)
+    else:
+        print(f"The file '{filename}' already exists.")
+        with open(filename, 'r') as file:
+            index_label_image = [line.strip() for line in file]
+
     dataset = DatasetFolderAdaSim(args.data_path, args, transform=transform, return_index_instead_of_target=True)
     sampler = torch.utils.data.DistributedSampler(dataset, shuffle=True)
 
@@ -156,7 +193,10 @@ def train_adasim(args):
     nn_matrix_cpu = torch.zeros(len(data_loader.dataset), args.vote_nn_nb, args.topk, dtype=torch.long)
     sim_matrix_cpu = torch.zeros(len(data_loader.dataset), args.vote_nn_nb, args.topk, dtype=torch.float)
 
+    # Construct a directed graph:
     graph = ig.Graph(n=len(data_loader.dataset), directed=True)
+    vertex_labels = [str(index) for index in range(graph.vcount())]
+    temp_file = 'temp_graph_with_labels.png'
 
     # ============ preparing loss ... ============
     adasim_loss = AdaSimLoss(
@@ -221,7 +261,6 @@ def train_adasim(args):
             optimizer=optimizer,
             fp16_scaler=fp16_scaler,
             adasim_loss=adasim_loss,
-            # graph = graph
         )
     except:
         # If checkpoint is corrupted, used backedup checkpoint
@@ -233,7 +272,6 @@ def train_adasim(args):
             optimizer=optimizer,
             fp16_scaler=fp16_scaler,
             adasim_loss=adasim_loss,
-            # graph = graph
         )
     start_epoch = to_restore["epoch"]
     features_cpu = to_restore["features_cpu"]
@@ -259,13 +297,9 @@ def train_adasim(args):
         if epoch >= args.vote_nn_nb:
             data_loader.dataset.nn_matrix_cpu = nn_matrix_cpu
             data_loader.dataset.sim_matrix_cpu = sim_matrix_cpu
-            data_loader.dataset.graph = graph
             adj = graph.get_adjacency()
             print(sum(sum(sublist) for sublist in adj.data))
-            vertex_labels = [str(index) for index in range(graph.vcount())]
-            # Save the igraph plot to a temporary file with vertex labels
-            temp_file = 'temp_graph_with_labels.png'
-            ig.plot(graph, target=temp_file, vertex_label=vertex_labels)
+            ig.plot(graph, target=temp_file, vertex_label=index_label_image)
             
         try:
             # ============ training one epoch of DINO ... ============
@@ -390,7 +424,9 @@ def train_one_epoch(student, teacher, teacher_without_ddp, adasim_loss, data_loa
     metric_logger = utils.MetricLogger(delimiter="  ")
     header = 'Epoch: [{}/{}]'.format(epoch, args.epochs)
 
-    for it, (images, indices, same_im_bool, neighbors) in enumerate(metric_logger.log_every(data_loader, 10, header)):
+# image, label, same_im, neighbors, index, image_name_list
+    # images, indices, same_im_bool, neighbors
+    for it, (images, label, same_im, neighbors, indices, image_name_list) in enumerate(metric_logger.log_every(data_loader, 10, header)):
         #update graph:
         if neighbors !=[]:
             edge_list_updates = []
