@@ -22,7 +22,7 @@ to_restore = {"epoch": 0,
                   "graph":graph}
 
 # Insert the checkpoint path to restore the saved graph:
-default_checkpoint_path = os.path.join('./output2', "checkpoint.pth")
+default_checkpoint_path = os.path.join('./dino_cifar10_3', "checkpoint.pth")
 utils.restart_from_checkpoint(
             default_checkpoint_path,
             run_variables=to_restore,
@@ -44,11 +44,12 @@ features_cpu = to_restore["features_cpu"]
 # sim_matrix_cpu = sim_matrix_cpu[:, -args.vote_nn_nb:]
 
 graph = to_restore["graph"]
-adj = graph.get_adjacency()
-print(sum(sum(sublist) for sublist in adj.data))
+# adj = graph.get_adjacency()
+# print(sum(sum(sublist) for sublist in adj.data))
+print(graph.vcount())
+print(graph.ecount())
 
-
-filename = 'index_label_image_cifar10-small.txt'
+filename = 'index_label_image_Cifar10.txt'
 # The file exists, read its contents
 with open(filename, 'r') as file:
     index_label_image = [line.strip() for line in file]
@@ -118,7 +119,7 @@ def adjust_layout_for_clustering(layout, labels):
 adjusted_layout = adjust_layout_for_clustering(layout, index_label_image)
 
 # Plot the graph
-ig.plot(graph, target='an.png', layout=adjusted_layout, vertex_label=index_label_image, bbox=(300, 300), margin=20)
+# ig.plot(graph, target='an.png', layout=adjusted_layout, vertex_label=index_label_image, bbox=(300, 300), margin=20)
 
 # Get edge list and convert to tensor
 edge_list = torch.tensor([edge.tuple for edge in graph.es], dtype=torch.long).t().contiguous()
@@ -129,7 +130,7 @@ node_features = torch.randn((graph.vcount(), 10))  # Example features
 
 from torch_geometric.data import Data
 
-num_nodes = 100  # Assuming 100 nodes in your graph
+num_nodes = graph.vcount()  # Assuming 100 nodes in your graph
 
 train_mask = torch.zeros(num_nodes, dtype=torch.bool)
 val_mask = torch.zeros(num_nodes, dtype=torch.bool)
@@ -148,6 +149,6 @@ gcn = GCN(data.num_features, 16, 10)
 print(gcn)
 
 # Train and test
-train(gcn, data)
+# train(gcn, data)
 # acc = test(gcn, data)
 # print(f'\nGCN test accuracy: {acc*100:.2f}%\n')

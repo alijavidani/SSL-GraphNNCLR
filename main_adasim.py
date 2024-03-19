@@ -85,7 +85,7 @@ def train_adasim(args):
     torch.distributed.barrier()
 
     dataset_graph = DatasetFolderAdaSim(args.data_path, args, transform=transform, return_index_instead_of_target=False)
-    sampler_graph = torch.utils.data.DistributedSampler(dataset_graph, shuffle=True)
+    sampler_graph = torch.utils.data.DistributedSampler(dataset_graph)
 
     data_loader_graph = torch.utils.data.DataLoader(
         dataset_graph,
@@ -93,7 +93,7 @@ def train_adasim(args):
         batch_size=args.batch_size_per_gpu,
         num_workers=args.num_workers,
         pin_memory=True,
-        drop_last=True,
+        drop_last=False,
     )
     print(f"Data loaded: there are {len(dataset_graph)} images.")
     
@@ -130,7 +130,7 @@ def train_adasim(args):
         batch_size=args.batch_size_per_gpu,
         num_workers=args.num_workers,
         pin_memory=True,
-        drop_last=True,
+        drop_last=False,
     )
     print(f"Data loaded: there are {len(dataset)} images.")
 
@@ -297,9 +297,9 @@ def train_adasim(args):
         if epoch >= args.vote_nn_nb:
             data_loader.dataset.nn_matrix_cpu = nn_matrix_cpu
             data_loader.dataset.sim_matrix_cpu = sim_matrix_cpu
-            adj = graph.get_adjacency()
-            print(sum(sum(sublist) for sublist in adj.data))
-            ig.plot(graph, target=temp_file, vertex_label=index_label_image)
+            # adj = graph.get_adjacency()
+            # print(sum(sum(sublist) for sublist in adj.data))
+            # ig.plot(graph, target=temp_file, vertex_label=index_label_image)
             
         try:
             # ============ training one epoch of DINO ... ============
@@ -426,14 +426,36 @@ def train_one_epoch(student, teacher, teacher_without_ddp, adasim_loss, data_loa
 
 # image, label, same_im, neighbors, index, image_name_list
     # images, indices, same_im_bool, neighbors
-    for it, (images, label, same_im, neighbors, indices, image_name_list) in enumerate(metric_logger.log_every(data_loader, 10, header)):
+    for it, (images, label, same_im_bool, neighbors, indices, image_name_list) in enumerate(metric_logger.log_every(data_loader, 10, header)):
         #update graph:
         if neighbors !=[]:
-            edge_list_updates = []
-            for i in range(len(indices)):
-                for j in range(neighbors.shape[1]):
-                    edge_list_updates.append((indices[i],neighbors[i,j]))
-            graph.add_edges(edge_list_updates)
+            edges_per_process = torch.zeros((len(indices)*args.edges_per_node,2),dtype=torch.long)
+            reshaped_indices = torch.reshape(indices,(-1,1)).squeeze()
+            edges_per_process[:,0] = torch.reshape(reshaped_indices.repeat((args.edges_per_node,1)).T,(-1,1)).squeeze()
+            edges_per_process[:,1] = torch.reshape(neighbors[:,:args.edges_per_node],(-1,1)).squeeze()
+
+            gathered_edges = [torch.zeros_like(edges_per_process) for _ in range(dist.get_world_size())]
+            dist.all_gather(gathered_edges, edges_per_process)
+            # Add gathered edges to the graph
+            non_existing_eids = []
+            existing_eids = []
+            for i in range(len(gathered_edges)):
+                gathered_edges_list = gathered_edges[i].tolist()
+                eids = graph.get_eids(gathered_edges_list)
+                #write a code to return index of eids that are already in the graph and return the index of the eids that are not in the graph
+                for j in range(len(eids)):
+                    if eids[j] == -1:
+                        non_existing_eids.append(j)
+                    else:
+                        existing_eids.append(j)
+                
+                graph.add_edges(gathered_edges_list[non_existing_eids])
+                #Add 1 to the weight attribute of the existing eids
+                graph.es['weight'][existing_eids] += 1
+                
+                # graph.add_edges(gathered_edges[i].tolist())
+
+        print(graph.ecount())
 
         # update weight decay and learning rate according to their schedule
         it = len(data_loader) * epoch + it  # global training iteration

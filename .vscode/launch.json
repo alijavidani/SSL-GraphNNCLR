@@ -9,7 +9,9 @@
             "name": "Python: Module",
             "type": "debugpy",
             "request": "launch",
-            "module": "graph",
+            // "module": "main_adasim",
+            "program": "/home/alij/dino_virtual_env/bin/torchrun",
+            "args": ["--nproc_per_node","4", "main_adasim.py"],
             "justMyCode": true
         }
     ]
