@@ -54,6 +54,8 @@ filename = 'index_label_image_Cifar10.txt'
 with open(filename, 'r') as file:
     index_label_image = [line.strip() for line in file]
 
+index_label_int = list(map(int, index_label_image))
+
 # Function to create a custom layout based on labels
 def custom_layout(labels):
     # Map each unique label to an integer
@@ -152,3 +154,123 @@ print(gcn)
 # train(gcn, data)
 # acc = test(gcn, data)
 # print(f'\nGCN test accuracy: {acc*100:.2f}%\n')
+
+# Perform Community Detection on the graph:
+# communities = graph.community_infomap()
+# print(communities)
+# print(len(communities))
+
+from sklearn.cluster import SpectralClustering
+# import numpy as np
+# import igraph as ig
+
+# Assume 'graph' is your igraph Graph object
+
+# # Convert the igraph graph to an adjacency matrix
+# adjacency_matrix = np.array(graph.get_adjacency().data)
+
+# # Specify the number of communities you wish to detect
+# n_communities = 10
+
+# # Initialize and fit the Spectral Clustering model
+# sc = SpectralClustering(n_clusters=n_communities, affinity='precomputed', n_init=10, assign_labels='discretize')
+# labels = sc.fit_predict(adjacency_matrix)
+
+import networkx
+import community as community_louvain
+A = graph.get_edgelist()
+G = networkx.DiGraph(A) # In case your graph is directed
+G_undirected = G.to_undirected()
+partition = community_louvain.best_partition(G_undirected)
+# print(partition)
+
+num_nodes = graph.vcount()
+partition_list = [-1] * num_nodes  # Initialize with -1 or any other placeholder
+
+# Populate the list with partition IDs
+for node_id, partition_id in partition.items():
+    partition_list[node_id] = partition_id
+
+# from sklearn.metrics import adjusted_rand_score
+# ari_score = adjusted_rand_score(index_label_int, partition_list)
+
+# from sklearn.metrics import normalized_mutual_info_score
+# nmi_score = normalized_mutual_info_score(index_label_int, partition_list)
+
+# from sklearn.metrics import homogeneity_score, completeness_score, v_measure_score
+# homogeneity = homogeneity_score(index_label_int, partition_list)
+# completeness = completeness_score(index_label_int, partition_list)
+# v_measure = v_measure_score(index_label_int, partition_list)
+
+# #print computed metrics:
+# print(f'ARI: {ari_score:.4f}')
+# print(f'NMI: {nmi_score:.4f}')
+# print(f'Homogeneity: {homogeneity:.4f}')
+# print(f'Completeness: {completeness:.4f}')
+# print(f'V-measure: {v_measure:.4f}')
+
+# import igraph as ig
+# import leidenalg as la
+
+# # Assuming 'G' is an igraph Graph
+# partition = la.find_partition(graph, la.ModularityVertexPartition)
+# print(partition)
+# print('leiden finished')
+
+# import igraph as ig
+
+# # G = ig.Graph.Erdos_Renyi(n=1000, m=5000)
+# dendrogram = graph.to_undirected().community_fastgreedy()
+# clusters = dendrogram.as_clustering()
+# print(clusters)
+# print('fastgreedy finished')
+
+import infomap
+
+im = infomap.Infomap("--two-level")
+
+# Assuming 'G' is a NetworkX graph
+for edge in G_undirected.edges():
+    im.addLink(*edge)
+
+im.run()
+
+print("Found {} modules.".format(im.numTopModules()))
+
+# Getting the community for each node
+communities = {node: module for node, module in im.modules}
+print(communities)
+print('infomap finished')
+
+# import networkx as nx
+# from networkx.algorithms.community import girvan_newman
+# # Assuming 'G' is your NetworkX graph
+# communities_generator = girvan_newman(G_undirected)
+
+# # Desired number of clusters
+# k = 10
+
+# # Initialize
+# limited_communities = None
+
+# for communities in communities_generator:
+#     limited_communities = communities  # Update the communities at each iteration
+#     if len(communities) == k:
+#         break
+
+# print(limited_communities)
+
+# 'limited_communities' now holds the clusters when the first 'k' clusters are formed
+# import matplotlib.pyplot as plt
+
+# # Assuming 'G' is your graph and 'limited_communities' contains your communities
+# pos = nx.spring_layout(G)  # positions for all nodes
+
+# # Color the nodes according to their community
+# for i, comm in enumerate(limited_communities):
+#     list_nodes = list(comm)
+#     nx.draw_networkx_nodes(G, pos, list_nodes, node_size=20,
+#                            node_color=str(i / len(limited_communities)))
+
+# nx.draw_networkx_edges(G, pos, alpha=0.5)
+# plt.show()

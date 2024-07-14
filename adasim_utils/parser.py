@@ -112,7 +112,7 @@ def get_args_parser():
                         choices=['first', 'second', 'mean'],
                         help="""Which representation to use for choosing the nearset neighboor.""")
     parser.add_argument('--topk', type=int, default=10, help="""How many to NN to keep track of.""")
-    parser.add_argument('--vote_nn_nb', type=int, default=5,
+    parser.add_argument('--vote_nn_nb', type=int, default=2,
                         help="""Number of votes from previous epoch to select the nearest neighbor.""")
     parser.add_argument('--sampling_softmax_temp', default=0.001, type=float,
                         help="""Softmax temperature for sampling distribution of NN.""")

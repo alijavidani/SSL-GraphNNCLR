@@ -36,7 +36,7 @@ import vision_transformer as vits
 from vision_transformer import DINOHead
 from adasim_utils.parser import get_args_parser
 import igraph as ig
-
+os.environ["CUDA_VISIBLE_DEVICES"] ="2,3"
 torchvision_archs = sorted(name for name in torchvision_models.__dict__
                            if name.islower() and not name.startswith("__")
                            and callable(torchvision_models.__dict__[name]))
@@ -121,6 +121,7 @@ def train_adasim(args):
         with open(filename, 'r') as file:
             index_label_image = [line.strip() for line in file]
 
+    index_label_int = list(map(int, index_label_image))
     dataset = DatasetFolderAdaSim(args.data_path, args, transform=transform, return_index_instead_of_target=True)
     sampler = torch.utils.data.DistributedSampler(dataset, shuffle=True)
 
@@ -195,6 +196,10 @@ def train_adasim(args):
 
     # Construct a directed graph:
     graph = ig.Graph(n=len(data_loader.dataset), directed=True)
+    edge_weights = {}  # Dictionary to store edge weights
+    if not graph.es.attribute_names().count("weight"):
+        graph.es["weight"] = [0] * len(graph.es)  # Initialize all to 0 if 'weight' doesn't exist
+
     vertex_labels = [str(index) for index in range(graph.vcount())]
     temp_file = 'temp_graph_with_labels.png'
 
@@ -280,6 +285,8 @@ def train_adasim(args):
     nn_matrix_cpu = to_restore["nn_matrix_cpu"]
     sim_matrix_cpu = to_restore["sim_matrix_cpu"]
     graph = to_restore["graph"]
+    if not graph.es.attribute_names().count("weight"):
+        graph.es["weight"] = [0] * len(graph.es)  # Initialize all to 0 if 'weight' doesn't exist
     nn_matrix_cpu = nn_matrix_cpu[:, -args.vote_nn_nb:]
     sim_matrix_cpu = sim_matrix_cpu[:, -args.vote_nn_nb:]
 
@@ -436,24 +443,16 @@ def train_one_epoch(student, teacher, teacher_without_ddp, adasim_loss, data_loa
 
             gathered_edges = [torch.zeros_like(edges_per_process) for _ in range(dist.get_world_size())]
             dist.all_gather(gathered_edges, edges_per_process)
-            # Add gathered edges to the graph
-            non_existing_eids = []
-            existing_eids = []
-            for i in range(len(gathered_edges)):
-                gathered_edges_list = gathered_edges[i].tolist()
-                eids = graph.get_eids(gathered_edges_list)
-                #write a code to return index of eids that are already in the graph and return the index of the eids that are not in the graph
-                for j in range(len(eids)):
-                    if eids[j] == -1:
-                        non_existing_eids.append(j)
-                    else:
-                        existing_eids.append(j)
-                
-                graph.add_edges(gathered_edges_list[non_existing_eids])
-                #Add 1 to the weight attribute of the existing eids
-                graph.es['weight'][existing_eids] += 1
-                
-                # graph.add_edges(gathered_edges[i].tolist())
+            
+            all_edges = []
+            for edges_tensor in gathered_edges:
+                edges_list = edges_tensor.cpu().numpy().tolist()
+                all_edges.extend(edges_list)
+
+            graph.add_edges(all_edges)
+            # Assuming all_edges is a list of (source, target) tuples
+            # for source, target in all_edges:
+            #     add_or_update_edge(graph, source, target)
 
         print(graph.ecount())
 
@@ -517,6 +516,30 @@ def train_one_epoch(student, teacher, teacher_without_ddp, adasim_loss, data_loa
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger)
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+
+
+# def add_or_update_edge(graph, source, target, edge_weights):
+#     edge_key = (source, target)  # Create a tuple key for the dictionary
+
+#     if edge_key in edge_weights:
+#         # Edge exists, increment its weight
+#         edge_weights[edge_key] += 1
+#     else:
+#         # Edge does not exist, add to the graph and set weight to 1 in the dictionary
+#         graph.add_edges([(source, target)])
+#         edge_weights[edge_key] = 1
+
+    # Now, update the actual graph edge attributes based on the dictionary
+    # This step can be optimized to run less frequently, e.g., after batch updates
+#     update_graph_edge_weights(graph, edge_weights)
+
+# def update_graph_edge_weights(graph, edge_weights):
+#     # It's more efficient to bulk-update edge attributes, so this function can be
+#     # called less frequently, not necessarily after each edge update
+#     for edge_key, weight in edge_weights.items():
+#         eid = graph.get_eid(edge_key[0], edge_key[1], directed=False, error=False)
+#         if eid != -1:  # Check if edge is valid (it should always be)
+#             graph.es[eid]['weight'] = weight
 
 
 class DataAugmentationDINO(object):
