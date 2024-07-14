@@ -63,7 +63,7 @@ def get_args_parser():
     parser.add_argument('--clip_grad', type=float, default=3.0, help="""Maximal parameter
         gradient norm if using gradient clipping. Clipping with norm .3 ~ 1.0 can
         help optimization for larger ViT architectures. 0 for disabling.""")
-    parser.add_argument('--batch_size_per_gpu', default=64, type=int,
+    parser.add_argument('--batch_size_per_gpu', default=100, type=int,
                         help='Per-GPU batch-size : number of distinct images loaded on one GPU.')
     parser.add_argument('--epochs', default=100, type=int, help='Number of epochs of training.')
     parser.add_argument('--freeze_last_layer', default=1, type=int, help="""Number of epochs
@@ -94,12 +94,12 @@ def get_args_parser():
         Used for small local view cropping of multi-crop.""")
 
     # Misc
-    parser.add_argument('--data_path', default='/path/to/imagenet/train/', type=str,
+    parser.add_argument('--data_path', default='/home/alij/Datasets/Cifar10', type=str,
                         help='Please specify path to the ImageNet training data.')
-    parser.add_argument('--output_dir', default=".", type=str, help='Path to save logs and checkpoints.')
-    parser.add_argument('--saveckp_freq', default=50, type=int, help='Save checkpoint every x epochs.')
+    parser.add_argument('--output_dir', default="./dino_cifar10_3/", type=str, help='Path to save logs and checkpoints.')
+    parser.add_argument('--saveckp_freq', default=20, type=int, help='Save checkpoint every x epochs.')
     parser.add_argument('--seed', default=0, type=int, help='Random seed.')
-    parser.add_argument('--num_workers', default=10, type=int, help='Number of data loading workers per GPU.')
+    parser.add_argument('--num_workers', default=8, type=int, help='Number of data loading workers per GPU.')
     parser.add_argument("--dist_url", default="env://", type=str, help="""url used to set up
         distributed training; see https://pytorch.org/docs/stable/distributed.html""")
     parser.add_argument("--local_rank", default=0, type=int, help="Please ignore and do not set this argument.")
@@ -107,13 +107,14 @@ def get_args_parser():
     # AdaSim extra arguments
     parser.add_argument('--start_checkpoint_path', default='', type=str, help="""Start training from a checkpoint 
         at arbitrary location if the output folder is empty.""")
-    parser.add_argument('--untar_path', default='', type=str)
+    parser.add_argument('--untar_path', default='/home/alij/Datasets/Cifar10', type=str)
     parser.add_argument('--nn_rep_type', default='first', type=str,
                         choices=['first', 'second', 'mean'],
                         help="""Which representation to use for choosing the nearset neighboor.""")
     parser.add_argument('--topk', type=int, default=10, help="""How many to NN to keep track of.""")
-    parser.add_argument('--vote_nn_nb', type=int, default=50,
+    parser.add_argument('--vote_nn_nb', type=int, default=2,
                         help="""Number of votes from previous epoch to select the nearest neighbor.""")
     parser.add_argument('--sampling_softmax_temp', default=0.001, type=float,
                         help="""Softmax temperature for sampling distribution of NN.""")
+    parser.add_argument('--edges_per_node', type=int, default=5, help="""How many to NN to keep track of.""")
     return parser

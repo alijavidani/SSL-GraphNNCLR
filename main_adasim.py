@@ -35,7 +35,8 @@ import utils
 import vision_transformer as vits
 from vision_transformer import DINOHead
 from adasim_utils.parser import get_args_parser
-
+import igraph as ig
+os.environ["CUDA_VISIBLE_DEVICES"] ="2,3"
 torchvision_archs = sorted(name for name in torchvision_models.__dict__
                            if name.islower() and not name.startswith("__")
                            and callable(torchvision_models.__dict__[name]))
@@ -77,9 +78,52 @@ def train_adasim(args):
 
         args.data_path = os.path.join(args.untar_path, 'ilsvrc2012', 'ILSVRC2012_img_train')
         args.data_path_val = os.path.join(args.untar_path, 'ilsvrc2012', 'ILSVRC2012_img_val')
+    else:
+        args.data_path = os.path.join(args.untar_path, 'train')
+        args.data_path_val = os.path.join(args.untar_path, 'test')
 
     torch.distributed.barrier()
 
+    #Make index_label:
+    dataset_graph = DatasetFolderAdaSim(args.data_path, args, transform=transform, return_index_instead_of_target=False)
+    sampler_graph = torch.utils.data.DistributedSampler(dataset_graph)
+
+    data_loader_graph = torch.utils.data.DataLoader(
+        dataset_graph,
+        sampler=sampler_graph,
+        batch_size=args.batch_size_per_gpu,
+        num_workers=args.num_workers,
+        pin_memory=True,
+        drop_last=False,
+    )
+    print(f"Data loaded: there are {len(dataset_graph)} images.")
+    
+
+    # Filename to check and write to
+    filename = f"index_label_image_{os.path.split(args.untar_path)[1]}.txt"
+
+    # Check if the file exists
+    if not os.path.exists(filename):
+        # If the file does not exist, execute the code and write the results
+        index_label_image = [None] * len(dataset_graph)
+
+        for it, (image, label, same_im, neighbors, index, image_name_list) in enumerate(data_loader_graph):
+            index_list = index.tolist()
+            label_list = label.tolist()
+            for index, label, image_name in zip(index_list, label_list, image_name_list):
+                index_label_image[index] = str(label)# + '_' + image_name
+
+        # Write the results to the file
+        with open(filename, 'w') as file:
+            for item in index_label_image:
+                file.write("%s\n" % item)
+    else:
+        print(f"The file '{filename}' already exists.")
+        with open(filename, 'r') as file:
+            index_label_image = [line.strip() for line in file]
+
+    index_label_int = list(map(int, index_label_image))
+    ###
     dataset = DatasetFolderAdaSim(args.data_path, args, transform=transform, return_index_instead_of_target=True)
     sampler = torch.utils.data.DistributedSampler(dataset, shuffle=True)
 
@@ -89,7 +133,7 @@ def train_adasim(args):
         batch_size=args.batch_size_per_gpu,
         num_workers=args.num_workers,
         pin_memory=True,
-        drop_last=True,
+        drop_last=False,
     )
     print(f"Data loaded: there are {len(dataset)} images.")
 
@@ -152,6 +196,15 @@ def train_adasim(args):
     nn_matrix_cpu = torch.zeros(len(data_loader.dataset), args.vote_nn_nb, args.topk, dtype=torch.long)
     sim_matrix_cpu = torch.zeros(len(data_loader.dataset), args.vote_nn_nb, args.topk, dtype=torch.float)
 
+    #TODO Construct a directed graph:
+    graph = ig.Graph(n=len(data_loader.dataset), directed=True)
+    edge_weights = {}  # Dictionary to store edge weights
+    if not graph.es.attribute_names().count("weight"):
+        graph.es["weight"] = [0] * len(graph.es)  # Initialize all to 0 if 'weight' doesn't exist
+
+    vertex_labels = [str(index) for index in range(graph.vcount())]
+    temp_file = 'temp_graph_with_labels.png'
+
     # ============ preparing loss ... ============
     adasim_loss = AdaSimLoss(
         args.out_dim,
@@ -198,7 +251,9 @@ def train_adasim(args):
                   'sim_tensor_cpu': sim_tensor_cpu,
                   'features_cpu': features_cpu,
                   "nn_matrix_cpu": nn_matrix_cpu,
-                  "sim_matrix_cpu": sim_matrix_cpu}
+                  "sim_matrix_cpu": sim_matrix_cpu,
+                  "graph":graph}
+    #TODO:add student graph
     default_checkpoint_path = os.path.join(args.output_dir, "checkpoint.pth")
     if not os.path.isfile(default_checkpoint_path) and os.path.isfile(args.start_checkpoint_path):
         utils.master_copy_from_to(args.start_checkpoint_path, default_checkpoint_path)
@@ -232,6 +287,11 @@ def train_adasim(args):
     sim_tensor_cpu = to_restore["sim_tensor_cpu"]
     nn_matrix_cpu = to_restore["nn_matrix_cpu"]
     sim_matrix_cpu = to_restore["sim_matrix_cpu"]
+    #TODO: add student graph and remove weight
+    graph = to_restore["graph"]
+    if not graph.es.attribute_names().count("weight"):
+        graph.es["weight"] = [0] * len(graph.es)  # Initialize all to 0 if 'weight' doesn't exist
+    #
     nn_matrix_cpu = nn_matrix_cpu[:, -args.vote_nn_nb:]
     sim_matrix_cpu = sim_matrix_cpu[:, -args.vote_nn_nb:]
 
@@ -249,13 +309,18 @@ def train_adasim(args):
         if epoch >= args.vote_nn_nb:
             data_loader.dataset.nn_matrix_cpu = nn_matrix_cpu
             data_loader.dataset.sim_matrix_cpu = sim_matrix_cpu
+            # adj = graph.get_adjacency()
+            # print(sum(sum(sublist) for sublist in adj.data))
+            # ig.plot(graph, target=temp_file, vertex_label=index_label_image)
+            
         try:
             # ============ training one epoch of DINO ... ============
 
             train_stats = train_one_epoch(student, teacher, teacher_without_ddp, adasim_loss,
                                           data_loader, optimizer, lr_schedule, wd_schedule, momentum_schedule,
                                           epoch, fp16_scaler, features, nn_tensor, sim_tensor, bootstrap_myself_tensor,
-                                          args)
+                                          graph, args)
+            #TODO:Add Student Graph
             nn_tensor_cpu = nn_tensor.cpu()
             sim_tensor_cpu = sim_tensor.cpu()
             features_cpu = features.cpu()
@@ -280,7 +345,9 @@ def train_adasim(args):
             'sim_tensor_cpu': sim_tensor_cpu,
             'features_cpu': features_cpu,
             'nn_matrix_cpu': nn_matrix_cpu,
-            'sim_matrix_cpu': sim_matrix_cpu
+            'sim_matrix_cpu': sim_matrix_cpu,
+            'graph':graph
+            #TODO: add student graph
         }
         if fp16_scaler is not None:
             save_dict['fp16_scaler'] = fp16_scaler.state_dict()
@@ -367,11 +434,35 @@ def update_state(teacher_output, indices_local, features, nn_tensor, sim_tensor,
 
 def train_one_epoch(student, teacher, teacher_without_ddp, adasim_loss, data_loader,
                     optimizer, lr_schedule, wd_schedule, momentum_schedule, epoch,
-                    fp16_scaler, features, nn_tensor, sim_tensor, bootstrap_myself_tensor, args):
+                    fp16_scaler, features, nn_tensor, sim_tensor, bootstrap_myself_tensor, graph, args):#add student graph
     metric_logger = utils.MetricLogger(delimiter="  ")
     header = 'Epoch: [{}/{}]'.format(epoch, args.epochs)
 
     for it, (images, indices, same_im_bool) in enumerate(metric_logger.log_every(data_loader, 10, header)):
+    #Comment these lines which are for learning
+    # for it, (images, label, same_im_bool, neighbors, indices, image_name_list) in enumerate(metric_logger.log_every(data_loader, 10, header)):
+    #     #update graph:
+    #     if neighbors !=[]:
+    #         edges_per_process = torch.zeros((len(indices)*args.edges_per_node,2),dtype=torch.long)
+    #         reshaped_indices = torch.reshape(indices,(-1,1)).squeeze()
+    #         edges_per_process[:,0] = torch.reshape(reshaped_indices.repeat((args.edges_per_node,1)).T,(-1,1)).squeeze()
+    #         edges_per_process[:,1] = torch.reshape(neighbors[:,:args.edges_per_node],(-1,1)).squeeze()
+
+    #         gathered_edges = [torch.zeros_like(edges_per_process) for _ in range(dist.get_world_size())]
+    #         dist.all_gather(gathered_edges, edges_per_process)
+            
+    #         all_edges = []
+    #         for edges_tensor in gathered_edges:
+    #             edges_list = edges_tensor.cpu().numpy().tolist()
+    #             all_edges.extend(edges_list)
+
+    #         graph.add_edges(all_edges)
+    #         # Assuming all_edges is a list of (source, target) tuples
+    #         # for source, target in all_edges:
+    #         #     add_or_update_edge(graph, source, target)
+
+    #     print(graph.ecount())
+
         # update weight decay and learning rate according to their schedule
         it = len(data_loader) * epoch + it  # global training iteration
         for i, param_group in enumerate(optimizer.param_groups):
@@ -432,6 +523,30 @@ def train_one_epoch(student, teacher, teacher_without_ddp, adasim_loss, data_loa
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger)
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+
+
+# def add_or_update_edge(graph, source, target, edge_weights):
+#     edge_key = (source, target)  # Create a tuple key for the dictionary
+
+#     if edge_key in edge_weights:
+#         # Edge exists, increment its weight
+#         edge_weights[edge_key] += 1
+#     else:
+#         # Edge does not exist, add to the graph and set weight to 1 in the dictionary
+#         graph.add_edges([(source, target)])
+#         edge_weights[edge_key] = 1
+
+    # Now, update the actual graph edge attributes based on the dictionary
+    # This step can be optimized to run less frequently, e.g., after batch updates
+#     update_graph_edge_weights(graph, edge_weights)
+
+# def update_graph_edge_weights(graph, edge_weights):
+#     # It's more efficient to bulk-update edge attributes, so this function can be
+#     # called less frequently, not necessarily after each edge update
+#     for edge_key, weight in edge_weights.items():
+#         eid = graph.get_eid(edge_key[0], edge_key[1], directed=False, error=False)
+#         if eid != -1:  # Check if edge is valid (it should always be)
+#             graph.es[eid]['weight'] = weight
 
 
 class DataAugmentationDINO(object):

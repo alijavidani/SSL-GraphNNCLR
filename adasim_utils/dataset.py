@@ -5,7 +5,6 @@ from collections import defaultdict
 from collections import OrderedDict
 import torch.nn.functional as FF
 
-
 class DatasetFolderAdaSim(DatasetFolder):
     def __init__(
             self,
@@ -27,6 +26,7 @@ class DatasetFolderAdaSim(DatasetFolder):
         self.imgs = self.samples
         self.nn_matrix_cpu = None
         self.sim_matrix_cpu = None
+        # self.graph = None
 
     def __getitem__(self, index: int):
         """
@@ -38,11 +38,15 @@ class DatasetFolderAdaSim(DatasetFolder):
         """
         path, target = self.samples[index]
         sample = self.loader(path)
+        # neighbors= []
 
         if self.nn_matrix_cpu is not None:
             # ~ 50 x 10 (vote_nn x topk)
             current_sim = self.sim_matrix_cpu[index]
             current_nn = self.nn_matrix_cpu[index]
+
+            # # Update the Graph
+            # neighbors = current_nn[-1, :self.args.topk]
 
             # Get sum of similarities for each index
             dict_lst = [defaultdict(float, zip(current_nn[n].tolist(), current_sim[n].tolist())) for n in

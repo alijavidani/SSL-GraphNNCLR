@@ -1,8 +1,11 @@
-
+output/
+output2/
 .idea/
+data/
+CiteSeer/
 *.pyc
-/CiteSeer
-/dino_cifar10/
-/dino_cifar10_2/
-/dino_cifar10_3/
-/output_cifar10/
+\__pycache__\*
+dino_cifar10/
+dino_cifar10_2/
+dino_cifar10_3/
+output_cifar10/
