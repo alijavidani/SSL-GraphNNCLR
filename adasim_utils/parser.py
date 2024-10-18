@@ -63,7 +63,7 @@ def get_args_parser():
     parser.add_argument('--clip_grad', type=float, default=3.0, help="""Maximal parameter
         gradient norm if using gradient clipping. Clipping with norm .3 ~ 1.0 can
         help optimization for larger ViT architectures. 0 for disabling.""")
-    parser.add_argument('--batch_size_per_gpu', default=100, type=int,
+    parser.add_argument('--batch_size_per_gpu', default=75, type=int,
                         help='Per-GPU batch-size : number of distinct images loaded on one GPU.')
     parser.add_argument('--epochs', default=100, type=int, help='Number of epochs of training.')
     parser.add_argument('--freeze_last_layer', default=1, type=int, help="""Number of epochs
@@ -96,7 +96,7 @@ def get_args_parser():
     # Misc
     parser.add_argument('--data_path', default='/home/alij/Datasets/Cifar10', type=str,
                         help='Please specify path to the ImageNet training data.')
-    parser.add_argument('--output_dir', default="./dino_cifar10_3/", type=str, help='Path to save logs and checkpoints.')
+    parser.add_argument('--output_dir', default="./dino_cifar10_5/", type=str, help='Path to save logs and checkpoints.')
     parser.add_argument('--saveckp_freq', default=20, type=int, help='Save checkpoint every x epochs.')
     parser.add_argument('--seed', default=0, type=int, help='Random seed.')
     parser.add_argument('--num_workers', default=8, type=int, help='Number of data loading workers per GPU.')

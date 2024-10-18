@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import os
+os.environ["CUDA_VISIBLE_DEVICES"] ="1,3"
 import torch
 import argparse
 import sys
@@ -36,7 +37,13 @@ import vision_transformer as vits
 from vision_transformer import DINOHead
 from adasim_utils.parser import get_args_parser
 import igraph as ig
-os.environ["CUDA_VISIBLE_DEVICES"] ="2,3"
+import networkx as nx
+from torch_geometric.utils import from_networkx
+# import cudf
+# import cugraph
+from my_functions import *
+from graph import *
+
 torchvision_archs = sorted(name for name in torchvision_models.__dict__
                            if name.islower() and not name.startswith("__")
                            and callable(torchvision_models.__dict__[name]))
@@ -84,46 +91,16 @@ def train_adasim(args):
 
     torch.distributed.barrier()
 
-    #Make index_label:
-    dataset_graph = DatasetFolderAdaSim(args.data_path, args, transform=transform, return_index_instead_of_target=False)
-    sampler_graph = torch.utils.data.DistributedSampler(dataset_graph)
+    index_label_int = make_index_label(args, transform)
 
-    data_loader_graph = torch.utils.data.DataLoader(
-        dataset_graph,
-        sampler=sampler_graph,
-        batch_size=args.batch_size_per_gpu,
-        num_workers=args.num_workers,
-        pin_memory=True,
-        drop_last=False,
-    )
-    print(f"Data loaded: there are {len(dataset_graph)} images.")
-    
+    # # Initialize the graph model:
+    # input_dim = 384       # Input feature dimension per node
+    # hidden_dims = [256, 128, 64]  # Hidden layer dimensions
+    # output_dim = 64       # Output dimension (graph-level embedding)
+    # num_layers = 3        # Number of GNN layers
 
-    # Filename to check and write to
-    filename = f"index_label_image_{os.path.split(args.untar_path)[1]}.txt"
+    # graph_model = GraphNet(input_dim, hidden_dims, output_dim, num_layers)
 
-    # Check if the file exists
-    if not os.path.exists(filename):
-        # If the file does not exist, execute the code and write the results
-        index_label_image = [None] * len(dataset_graph)
-
-        for it, (image, label, same_im, neighbors, index, image_name_list) in enumerate(data_loader_graph):
-            index_list = index.tolist()
-            label_list = label.tolist()
-            for index, label, image_name in zip(index_list, label_list, image_name_list):
-                index_label_image[index] = str(label)# + '_' + image_name
-
-        # Write the results to the file
-        with open(filename, 'w') as file:
-            for item in index_label_image:
-                file.write("%s\n" % item)
-    else:
-        print(f"The file '{filename}' already exists.")
-        with open(filename, 'r') as file:
-            index_label_image = [line.strip() for line in file]
-
-    index_label_int = list(map(int, index_label_image))
-    ###
     dataset = DatasetFolderAdaSim(args.data_path, args, transform=transform, return_index_instead_of_target=True)
     sampler = torch.utils.data.DistributedSampler(dataset, shuffle=True)
 
@@ -188,22 +165,50 @@ def train_adasim(args):
         p.requires_grad = False
     print(f"Student and Teacher are built: they are both {args.arch} network.")
 
-    features_cpu = torch.zeros(len(data_loader.dataset), embed_dim, dtype=torch.float)
+    teacher_features_cpu = torch.zeros(len(data_loader.dataset), embed_dim, dtype=torch.float)
+    teacher_nn_tensor_cpu = torch.zeros(len(data_loader.dataset), args.topk, dtype=torch.long)
+    teacher_sim_tensor_cpu = torch.zeros(len(data_loader.dataset), args.topk, dtype=torch.float)
+    teacher_nn_matrix_cpu = torch.zeros(len(data_loader.dataset), args.vote_nn_nb, args.topk, dtype=torch.long)
+    teacher_sim_matrix_cpu = torch.zeros(len(data_loader.dataset), args.vote_nn_nb, args.topk, dtype=torch.float)
 
-    nn_tensor_cpu = torch.zeros(len(data_loader.dataset), args.topk, dtype=torch.long)
-    sim_tensor_cpu = torch.zeros(len(data_loader.dataset), args.topk, dtype=torch.float)
+    student_features_cpu = torch.zeros(len(data_loader.dataset), embed_dim, dtype=torch.float)
+    student_nn_tensor_cpu = torch.zeros(len(data_loader.dataset), args.topk, dtype=torch.long)
+    student_sim_tensor_cpu = torch.zeros(len(data_loader.dataset), args.topk, dtype=torch.float)
+    student_nn_matrix_cpu = torch.zeros(len(data_loader.dataset), args.vote_nn_nb, args.topk, dtype=torch.long)
+    student_sim_matrix_cpu = torch.zeros(len(data_loader.dataset), args.vote_nn_nb, args.topk, dtype=torch.float)
 
-    nn_matrix_cpu = torch.zeros(len(data_loader.dataset), args.vote_nn_nb, args.topk, dtype=torch.long)
-    sim_matrix_cpu = torch.zeros(len(data_loader.dataset), args.vote_nn_nb, args.topk, dtype=torch.float)
+    # Create NetworkX graphs
+    teacher_graph = nx.DiGraph()
+    student_graph = nx.DiGraph()
 
-    #TODO Construct a directed graph:
-    graph = ig.Graph(n=len(data_loader.dataset), directed=True)
-    edge_weights = {}  # Dictionary to store edge weights
-    if not graph.es.attribute_names().count("weight"):
-        graph.es["weight"] = [0] * len(graph.es)  # Initialize all to 0 if 'weight' doesn't exist
+    # Add nodes to the graphs
+    teacher_graph.add_nodes_from(range(len(data_loader.dataset)))
+    student_graph.add_nodes_from(range(len(data_loader.dataset)))
 
-    vertex_labels = [str(index) for index in range(graph.vcount())]
-    temp_file = 'temp_graph_with_labels.png'
+    # Assuming you have edges to add in the form of a list of tuples (source, target)
+    # edges_to_add = [(0, 1), (1, 2), (2, 3), (3, 4)]  # Example edge list
+
+    # Convert edge list to a cuDF DataFrame
+    # edge_df = cudf.DataFrame(edges_to_add, columns=['source', 'target'])
+
+    # Create a cuGraph Graph
+    # G_cu = cugraph.DiGraph()
+
+    # Add edges to the cuGraph
+    # G_cu.from_cudf_edgelist(edge_df, source='source', destination='target')
+
+    # If you need to convert back to NetworkX
+    # edge_list = G_cu.view_edge_list().to_pandas().to_records(index=False)
+    # teacher_graph.add_edges_from(edges_to_add)
+
+    # Now teacher_graph has the edges added
+    # print(teacher_graph.edges())
+
+    # edge_weights = {}  # Dictionary to store edge weights
+    # if not graph.es.attribute_names().count("weight"):
+    #     graph.es["weight"] = [0] * len(graph.es)  # Initialize all to 0 if 'weight' doesn't exist
+    # vertex_labels = [str(index) for index in range(graph.vcount())]
+    # temp_file = 'temp_graph_with_labels.png'
 
     # ============ preparing loss ... ============
     adasim_loss = AdaSimLoss(
@@ -212,11 +217,11 @@ def train_adasim(args):
         args.warmup_teacher_temp,
         args.teacher_temp,
         args.warmup_teacher_temp_epochs,
-        args.epochs, args=args
+        args.epochs, graph_model=graph_model, args=args
     ).cuda()
 
     # ============ preparing optimizer ... ============
-    params_groups = utils.get_params_groups(student)
+    params_groups = utils.get_params_groups([student, graph_model])#, graph_model
     if args.optimizer == "adamw":
         optimizer = torch.optim.AdamW(params_groups)  # to use with ViTs
     elif args.optimizer == "sgd":
@@ -247,13 +252,19 @@ def train_adasim(args):
 
     # ============ optionally resume training ... ============n
     to_restore = {"epoch": 0,
-                  'nn_tensor_cpu': nn_tensor_cpu,
-                  'sim_tensor_cpu': sim_tensor_cpu,
-                  'features_cpu': features_cpu,
-                  "nn_matrix_cpu": nn_matrix_cpu,
-                  "sim_matrix_cpu": sim_matrix_cpu,
-                  "graph":graph}
-    #TODO:add student graph
+                  'teacher_nn_tensor_cpu': teacher_nn_tensor_cpu,
+                  'teacher_sim_tensor_cpu': teacher_sim_tensor_cpu,
+                  'teacher_features_cpu': teacher_features_cpu,
+                  "teacher_nn_matrix_cpu": teacher_nn_matrix_cpu,
+                  "teacher_sim_matrix_cpu": teacher_sim_matrix_cpu,
+                  'student_nn_tensor_cpu': student_nn_tensor_cpu,
+                  'student_sim_tensor_cpu': student_sim_tensor_cpu,
+                  'student_features_cpu': student_features_cpu,
+                  "student_nn_matrix_cpu": student_nn_matrix_cpu,
+                  "student_sim_matrix_cpu": student_sim_matrix_cpu,
+                  "teacher_graph": teacher_graph,
+                  "student_graph": student_graph
+                  }
     default_checkpoint_path = os.path.join(args.output_dir, "checkpoint.pth")
     if not os.path.isfile(default_checkpoint_path) and os.path.isfile(args.start_checkpoint_path):
         utils.master_copy_from_to(args.start_checkpoint_path, default_checkpoint_path)
@@ -282,22 +293,37 @@ def train_adasim(args):
             adasim_loss=adasim_loss,
         )
     start_epoch = to_restore["epoch"]
-    features_cpu = to_restore["features_cpu"]
-    nn_tensor_cpu = to_restore["nn_tensor_cpu"]
-    sim_tensor_cpu = to_restore["sim_tensor_cpu"]
-    nn_matrix_cpu = to_restore["nn_matrix_cpu"]
-    sim_matrix_cpu = to_restore["sim_matrix_cpu"]
-    #TODO: add student graph and remove weight
-    graph = to_restore["graph"]
-    if not graph.es.attribute_names().count("weight"):
-        graph.es["weight"] = [0] * len(graph.es)  # Initialize all to 0 if 'weight' doesn't exist
-    #
-    nn_matrix_cpu = nn_matrix_cpu[:, -args.vote_nn_nb:]
-    sim_matrix_cpu = sim_matrix_cpu[:, -args.vote_nn_nb:]
+    teacher_features_cpu = to_restore["teacher_features_cpu"]
+    teacher_nn_tensor_cpu = to_restore["teacher_nn_tensor_cpu"]
+    teacher_sim_tensor_cpu = to_restore["teacher_sim_tensor_cpu"]
+    teacher_nn_matrix_cpu = to_restore["teacher_nn_matrix_cpu"]
+    teacher_sim_matrix_cpu = to_restore["teacher_sim_matrix_cpu"]
 
-    features = features_cpu.cuda()
-    nn_tensor = nn_tensor_cpu.cuda()
-    sim_tensor = sim_tensor_cpu.cuda()
+    student_features_cpu = to_restore["student_features_cpu"]
+    student_nn_tensor_cpu = to_restore["student_nn_tensor_cpu"]
+    student_sim_tensor_cpu = to_restore["student_sim_tensor_cpu"]
+    student_nn_matrix_cpu = to_restore["student_nn_matrix_cpu"]
+    student_sim_matrix_cpu = to_restore["student_sim_matrix_cpu"]
+
+    teacher_graph = to_restore["teacher_graph"]
+    student_graph = to_restore["student_graph"]
+
+    # if not graph.es.attribute_names().count("weight"):
+    #     graph.es["weight"] = [0] * len(graph.es)  # Initialize all to 0 if 'weight' doesn't exist
+    #
+    teacher_nn_matrix_cpu = teacher_nn_matrix_cpu[:, -args.vote_nn_nb:]
+    teacher_sim_matrix_cpu = teacher_sim_matrix_cpu[:, -args.vote_nn_nb:]
+
+    student_nn_matrix_cpu = student_nn_matrix_cpu[:, -args.vote_nn_nb:]
+    student_sim_matrix_cpu = student_sim_matrix_cpu[:, -args.vote_nn_nb:]
+
+    teacher_features = teacher_features_cpu.cuda()
+    teacher_nn_tensor = teacher_nn_tensor_cpu.cuda()
+    teacher_sim_tensor = teacher_sim_tensor_cpu.cuda()
+
+    student_features = student_features_cpu.cuda()
+    student_nn_tensor = student_nn_tensor_cpu.cuda()
+    student_sim_tensor = student_sim_tensor_cpu.cuda()
 
     start_time = time.time()
     print("Starting AdaSim training !")
@@ -307,8 +333,12 @@ def train_adasim(args):
         data_loader.sampler.set_epoch(epoch)
 
         if epoch >= args.vote_nn_nb:
-            data_loader.dataset.nn_matrix_cpu = nn_matrix_cpu
-            data_loader.dataset.sim_matrix_cpu = sim_matrix_cpu
+            data_loader.dataset.teacher_nn_matrix_cpu = teacher_nn_matrix_cpu
+            data_loader.dataset.teacher_sim_matrix_cpu = teacher_sim_matrix_cpu
+            
+            # data_loader.dataset.student_nn_matrix_cpu = student_nn_matrix_cpu
+            # data_loader.dataset.student_sim_matrix_cpu = student_sim_matrix_cpu
+
             # adj = graph.get_adjacency()
             # print(sum(sum(sublist) for sublist in adj.data))
             # ig.plot(graph, target=temp_file, vertex_label=index_label_image)
@@ -318,14 +348,18 @@ def train_adasim(args):
 
             train_stats = train_one_epoch(student, teacher, teacher_without_ddp, adasim_loss,
                                           data_loader, optimizer, lr_schedule, wd_schedule, momentum_schedule,
-                                          epoch, fp16_scaler, features, nn_tensor, sim_tensor, bootstrap_myself_tensor,
-                                          graph, args)
-            #TODO:Add Student Graph
-            nn_tensor_cpu = nn_tensor.cpu()
-            sim_tensor_cpu = sim_tensor.cpu()
-            features_cpu = features.cpu()
+                                          epoch, fp16_scaler, teacher_features, teacher_nn_tensor, teacher_sim_tensor, bootstrap_myself_tensor,
+                                          teacher_graph, args, student_features, student_nn_tensor, student_sim_tensor, student_graph)
+            teacher_nn_tensor_cpu = teacher_nn_tensor.cpu()
+            teacher_sim_tensor_cpu = teacher_sim_tensor.cpu()
+            teacher_features_cpu = teacher_features.cpu()
 
-            update_nn(nn_tensor_cpu, sim_tensor_cpu, nn_matrix_cpu, sim_matrix_cpu)
+            student_nn_tensor_cpu = student_nn_tensor.cpu()
+            student_sim_tensor_cpu = student_sim_tensor.cpu()
+            student_features_cpu = student_features.cpu()
+
+            update_nn(teacher_nn_tensor_cpu, teacher_sim_tensor_cpu, teacher_nn_matrix_cpu, teacher_sim_matrix_cpu)
+            update_nn(student_nn_tensor_cpu, student_sim_tensor_cpu, student_nn_matrix_cpu, student_sim_matrix_cpu)
 
         except Exception as e:
             print(e, flush=True)
@@ -341,13 +375,13 @@ def train_adasim(args):
             'epoch': epoch + 1,
             'args': args,
             'adasim_loss': adasim_loss.state_dict(),
-            'nn_tensor_cpu': nn_tensor_cpu,
-            'sim_tensor_cpu': sim_tensor_cpu,
-            'features_cpu': features_cpu,
-            'nn_matrix_cpu': nn_matrix_cpu,
-            'sim_matrix_cpu': sim_matrix_cpu,
-            'graph':graph
-            #TODO: add student graph
+            'teacher_nn_tensor_cpu': teacher_nn_tensor_cpu,
+            'teacher_sim_tensor_cpu': teacher_sim_tensor_cpu,
+            'teacher_features_cpu': teacher_features_cpu,
+            'teacher_nn_matrix_cpu': teacher_nn_matrix_cpu,
+            'teacher_sim_matrix_cpu': teacher_sim_matrix_cpu,
+            'teacher_graph': teacher_graph,
+            'student_graph': student_graph
         }
         if fp16_scaler is not None:
             save_dict['fp16_scaler'] = fp16_scaler.state_dict()
@@ -360,10 +394,10 @@ def train_adasim(args):
         else:
             log_stats = {**{f'train_{k}': v for k, v in train_stats.items()}, 'epoch': epoch,
                          'epoch_time': time.time() - start_epoch_time,
-                         'nn_accuracy_top1': get_nn_acuracy(dataset, nn_tensor_cpu[:, 0]),
-                         'nn_accuracy_top2': get_nn_acuracy(dataset, nn_tensor_cpu[:, 1]),
-                         'nn_self_accuracy_top1': get_nn_self_accuracy(nn_tensor_cpu[:, 0]),
-                         'nn_self_accuracy_top2': get_nn_self_accuracy(nn_tensor_cpu[:, 1]),
+                         'nn_accuracy_top1': get_nn_acuracy(dataset, teacher_nn_tensor_cpu[:, 0]),
+                         'nn_accuracy_top2': get_nn_acuracy(dataset, teacher_nn_tensor_cpu[:, 1]),
+                         'nn_self_accuracy_top1': get_nn_self_accuracy(teacher_nn_tensor_cpu[:, 0]),
+                         'nn_self_accuracy_top2': get_nn_self_accuracy(teacher_nn_tensor_cpu[:, 1]),
                          'nn_ratio_self': bootstrap_myself_tensor.sum().item() / len(bootstrap_myself_tensor)}
         if utils.is_main_process():
             with (Path(args.output_dir) / "log.txt").open("a") as f:
@@ -401,8 +435,20 @@ def gather_all_gpus(local_tensor):
     return torch.cat(output_l)
 
 
-def update_state(teacher_output, indices_local, features, nn_tensor, sim_tensor, same_im_bool, bootstrap_myself_tensor,
-                 args):
+def update_state(indices_batch_all, features_batch_all, indices_knn_batch_all, sims_knn_batch_all, \
+                 features, nn_tensor, sim_tensor, bootstrap_myself_tensor, same_im_bool):
+    # Ensure features_batch_all and features have the same dtype
+    features_batch_all = features_batch_all.to(features.dtype)
+    sims_knn_batch_all = sims_knn_batch_all.to(sim_tensor.dtype)
+
+    features.index_copy_(0, indices_batch_all, features_batch_all).cpu()
+    nn_tensor.index_copy_(0, indices_batch_all, indices_knn_batch_all).cpu()
+    sim_tensor.index_copy_(0, indices_batch_all, sims_knn_batch_all).cpu()
+    bootstrap_myself_tensor[indices_batch_all.cpu()] = gather_all_gpus(same_im_bool).cpu()
+
+
+def update_graph(teacher_output, indices_local, features, nn_tensor, sim_tensor, bootstrap_myself_tensor, same_im_bool,
+                 graph, args):
     with torch.no_grad():
         feats_local = F.normalize(teacher_output[1].reshape(2, -1, teacher_output[1].shape[-1]), p=2, dim=-1)
         if args.nn_rep_type == "mean":
@@ -414,6 +460,9 @@ def update_state(teacher_output, indices_local, features, nn_tensor, sim_tensor,
             feats_local = feats_local[1]
         else:
             raise NotImplemented
+        
+        # Convert feats_local to the same type as features
+        feats_local = feats_local.to(features.dtype)
 
         # Compute knn
         similarity = feats_local @ features.T
@@ -424,45 +473,28 @@ def update_state(teacher_output, indices_local, features, nn_tensor, sim_tensor,
         indices_knn_batch_all = gather_all_gpus(indices_knn_local)
         sims_knn_batch_all = gather_all_gpus(sims_knn_local)
 
-        features.index_copy_(0, indices_batch_all, features_batch_all)
-        nn_tensor.index_copy_(0, indices_batch_all, indices_knn_batch_all)
-        sim_tensor.index_copy_(0, indices_batch_all, sims_knn_batch_all)
+        # features.index_copy_(0, indices_batch_all, features_batch_all)
+        # nn_tensor.index_copy_(0, indices_batch_all, indices_knn_batch_all)
+        # sim_tensor.index_copy_(0, indices_batch_all, sims_knn_batch_all)
 
-        # Same as above but for cpu tensor
-        bootstrap_myself_tensor[indices_batch_all.cpu()] = gather_all_gpus(same_im_bool).cpu()
+        edges = torch.zeros((len(indices_batch_all)*args.edges_per_node,2),dtype=torch.long)
+        edges[:,0] = torch.reshape(indices_batch_all.repeat((args.edges_per_node,1)).T,(-1,1)).squeeze()
+        edges[:,1] = torch.reshape(indices_knn_batch_all[:,:args.edges_per_node],(-1,1)).squeeze()
+        
+        edges_to_add = [tuple(row) for row in edges.tolist()]
+        graph.add_edges_from(edges_to_add)
+
+        return indices_batch_all, features_batch_all, indices_knn_batch_all, sims_knn_batch_all
 
 
 def train_one_epoch(student, teacher, teacher_without_ddp, adasim_loss, data_loader,
-                    optimizer, lr_schedule, wd_schedule, momentum_schedule, epoch,
-                    fp16_scaler, features, nn_tensor, sim_tensor, bootstrap_myself_tensor, graph, args):#add student graph
+                    optimizer, lr_schedule, wd_schedule, momentum_schedule, epoch, fp16_scaler,
+                    teacher_features, teacher_nn_tensor, teacher_sim_tensor, bootstrap_myself_tensor, teacher_graph, args,
+                    student_features, student_nn_tensor, student_sim_tensor, student_graph):
     metric_logger = utils.MetricLogger(delimiter="  ")
     header = 'Epoch: [{}/{}]'.format(epoch, args.epochs)
 
     for it, (images, indices, same_im_bool) in enumerate(metric_logger.log_every(data_loader, 10, header)):
-    #Comment these lines which are for learning
-    # for it, (images, label, same_im_bool, neighbors, indices, image_name_list) in enumerate(metric_logger.log_every(data_loader, 10, header)):
-    #     #update graph:
-    #     if neighbors !=[]:
-    #         edges_per_process = torch.zeros((len(indices)*args.edges_per_node,2),dtype=torch.long)
-    #         reshaped_indices = torch.reshape(indices,(-1,1)).squeeze()
-    #         edges_per_process[:,0] = torch.reshape(reshaped_indices.repeat((args.edges_per_node,1)).T,(-1,1)).squeeze()
-    #         edges_per_process[:,1] = torch.reshape(neighbors[:,:args.edges_per_node],(-1,1)).squeeze()
-
-    #         gathered_edges = [torch.zeros_like(edges_per_process) for _ in range(dist.get_world_size())]
-    #         dist.all_gather(gathered_edges, edges_per_process)
-            
-    #         all_edges = []
-    #         for edges_tensor in gathered_edges:
-    #             edges_list = edges_tensor.cpu().numpy().tolist()
-    #             all_edges.extend(edges_list)
-
-    #         graph.add_edges(all_edges)
-    #         # Assuming all_edges is a list of (source, target) tuples
-    #         # for source, target in all_edges:
-    #         #     add_or_update_edge(graph, source, target)
-
-    #     print(graph.ecount())
-
         # update weight decay and learning rate according to their schedule
         it = len(data_loader) * epoch + it  # global training iteration
         for i, param_group in enumerate(optimizer.param_groups):
@@ -478,7 +510,27 @@ def train_one_epoch(student, teacher, teacher_without_ddp, adasim_loss, data_loa
         with torch.cuda.amp.autocast(fp16_scaler is not None):
             teacher_output = teacher(images[:2])  # only the 2 global views pass through the teacher
             student_output = student(images)
-            loss = adasim_loss(student_output, teacher_output, epoch)
+            
+            #Update Teacher and Student Graphs:
+            teacher_indices_batch_all, teacher_features_batch_all, teacher_indices_knn_batch_all, teacher_sims_knn_batch_all = update_graph(teacher_output, indices, teacher_features, teacher_nn_tensor, teacher_sim_tensor, same_im_bool, bootstrap_myself_tensor,
+                        teacher_graph, args)
+            student_indices_batch_all, student_features_batch_all, student_indices_knn_batch_all, student_sims_knn_batch_all = update_graph(student_output, indices, student_features, student_nn_tensor, student_sim_tensor, same_im_bool, bootstrap_myself_tensor,
+                        student_graph, args)
+
+            print(teacher_graph.number_of_edges())
+            print(student_graph.number_of_edges())
+
+            update_state(teacher_indices_batch_all, teacher_features_batch_all, teacher_indices_knn_batch_all, teacher_sims_knn_batch_all,\
+                        teacher_features, teacher_nn_tensor, teacher_sim_tensor, bootstrap_myself_tensor, same_im_bool)
+            update_state(student_indices_batch_all, student_features_batch_all, student_indices_knn_batch_all, student_sims_knn_batch_all,\
+                        student_features, student_nn_tensor, student_sim_tensor, bootstrap_myself_tensor, same_im_bool)
+
+            teacher_features = teacher_features.to(device)
+            student_features = student_features.to(device)
+            teacher_indices_batch_all = teacher_indices_batch_all.to(device)
+
+            loss = adasim_loss(student_output, teacher_output, epoch, teacher_graph, student_graph,
+                teacher_features, student_features, teacher_indices_batch_all)
 
         if not math.isfinite(loss.item()):
             print("Loss is {}, stopping training".format(loss.item()), force=True)
@@ -511,8 +563,10 @@ def train_one_epoch(student, teacher, teacher_without_ddp, adasim_loss, data_loa
             for param_q, param_k in zip(student.module.parameters(), teacher_without_ddp.parameters()):
                 param_k.data.mul_(m).add_((1 - m) * param_q.detach().data)
 
-        update_state(teacher_output, indices, features, nn_tensor, sim_tensor, same_im_bool, bootstrap_myself_tensor,
-                     args)
+        # update_state(teacher_indices_batch_all, teacher_features_batch_all, teacher_indices_knn_batch_all, teacher_sims_knn_batch_all,\
+        #             teacher_features, teacher_nn_tensor, teacher_sim_tensor, bootstrap_myself_tensor, same_im_bool)
+        # update_state(student_indices_batch_all, student_features_batch_all, student_indices_knn_batch_all, student_sims_knn_batch_all,\
+        #             student_features, student_nn_tensor, student_sim_tensor, bootstrap_myself_tensor, same_im_bool)
 
         # logging
         torch.cuda.synchronize()
@@ -523,30 +577,6 @@ def train_one_epoch(student, teacher, teacher_without_ddp, adasim_loss, data_loa
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger)
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
-
-
-# def add_or_update_edge(graph, source, target, edge_weights):
-#     edge_key = (source, target)  # Create a tuple key for the dictionary
-
-#     if edge_key in edge_weights:
-#         # Edge exists, increment its weight
-#         edge_weights[edge_key] += 1
-#     else:
-#         # Edge does not exist, add to the graph and set weight to 1 in the dictionary
-#         graph.add_edges([(source, target)])
-#         edge_weights[edge_key] = 1
-
-    # Now, update the actual graph edge attributes based on the dictionary
-    # This step can be optimized to run less frequently, e.g., after batch updates
-#     update_graph_edge_weights(graph, edge_weights)
-
-# def update_graph_edge_weights(graph, edge_weights):
-#     # It's more efficient to bulk-update edge attributes, so this function can be
-#     # called less frequently, not necessarily after each edge update
-#     for edge_key, weight in edge_weights.items():
-#         eid = graph.get_eid(edge_key[0], edge_key[1], directed=False, error=False)
-#         if eid != -1:  # Check if edge is valid (it should always be)
-#             graph.es[eid]['weight'] = weight
 
 
 class DataAugmentationDINO(object):
