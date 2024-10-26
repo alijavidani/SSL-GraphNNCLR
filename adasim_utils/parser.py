@@ -19,7 +19,7 @@ def get_args_parser():
     parser = argparse.ArgumentParser('AdaSim', add_help=False)
 
     # Model parameters
-    parser.add_argument('--arch', default='vit_small', type=str,
+    parser.add_argument('--arch', default='vit_tiny', type=str,
                         choices=['vit_tiny', 'vit_small', 'vit_base', 'xcit', 'deit_tiny', 'deit_small', 'resnet50'],
                         help="""Name of architecture to train. For quick experiments with ViTs,
         we recommend using vit_tiny or vit_small.""")
@@ -28,13 +28,16 @@ def get_args_parser():
         values leads to better performance but requires more memory. Applies only
         for ViTs (vit_tiny, vit_small and vit_base). If <16, we recommend disabling
         mixed precision training (--use_fp16 false) to avoid unstabilities.""")
-    parser.add_argument('--out_dim', default=65536, type=int, help="""Dimensionality of
+    parser.add_argument('--out_dim', default=10000, type=int, help="""Dimensionality of
         the DINO head output. For complex and large datasets large values (like 65k) work well.""")
     parser.add_argument('--norm_last_layer', default=True, type=bool_flag,
                         help="""Whether or not to weight normalize the last layer of the DINO head.
         Not normalizing leads to better performance but can make the training unstable.
         In our experiments, we typically set this paramater to False with vit_small and True with vit_base.""")
     parser.add_argument('--momentum_teacher', default=0.996, type=float, help="""Base EMA
+        parameter for teacher update. The value is increased to 1 during training with cosine schedule.
+        We recommend setting a higher value with small batches: for example use 0.9995 with batch size of 256.""")
+    parser.add_argument('--momentum_teacher_graph', default=0.996, type=float, help="""Base EMA
         parameter for teacher update. The value is increased to 1 during training with cosine schedule.
         We recommend setting a higher value with small batches: for example use 0.9995 with batch size of 256.""")
     parser.add_argument('--use_bn_in_head', default=False, type=bool_flag,
@@ -63,7 +66,7 @@ def get_args_parser():
     parser.add_argument('--clip_grad', type=float, default=3.0, help="""Maximal parameter
         gradient norm if using gradient clipping. Clipping with norm .3 ~ 1.0 can
         help optimization for larger ViT architectures. 0 for disabling.""")
-    parser.add_argument('--batch_size_per_gpu', default=75, type=int,
+    parser.add_argument('--batch_size_per_gpu', default=10, type=int,
                         help='Per-GPU batch-size : number of distinct images loaded on one GPU.')
     parser.add_argument('--epochs', default=100, type=int, help='Number of epochs of training.')
     parser.add_argument('--freeze_last_layer', default=1, type=int, help="""Number of epochs
@@ -96,7 +99,7 @@ def get_args_parser():
     # Misc
     parser.add_argument('--data_path', default='/home/alij/Datasets/Cifar10', type=str,
                         help='Please specify path to the ImageNet training data.')
-    parser.add_argument('--output_dir', default="./dino_cifar10_5/", type=str, help='Path to save logs and checkpoints.')
+    parser.add_argument('--output_dir', default="./dino_cifar10_7/", type=str, help='Path to save logs and checkpoints.')
     parser.add_argument('--saveckp_freq', default=20, type=int, help='Save checkpoint every x epochs.')
     parser.add_argument('--seed', default=0, type=int, help='Random seed.')
     parser.add_argument('--num_workers', default=8, type=int, help='Number of data loading workers per GPU.')
