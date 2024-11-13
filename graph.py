@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from torch_geometric.nn import GCNConv, GATConv, global_mean_pool
 
 class GraphNet(nn.Module):
-    def __init__(self, input_dim, hidden_dims, output_dim, num_layers=3):
+    def __init__(self, input_dim, hidden_dims, num_layers=3):
         super(GraphNet, self).__init__()
         
         # Define the layers
@@ -21,24 +21,46 @@ class GraphNet(nn.Module):
         self.dropout = nn.Dropout(p=0.5)
         
     def forward(self, x, edge_index, batch):
+        x_initial = x
         for i in range(self.num_layers):
             x = self.convs[i](x, edge_index)
             x = self.bns[i](x)
             x = F.relu(x)
             x = self.dropout(x)
-        
-        # Global pooling (to get graph-level embedding)
+        # x += x_initial  # Residual connection
         y = global_mean_pool(x, batch)
-        
         return x, y
 
-    
-# Set the device
-# device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# # Initialize the graph model:
-# input_dim = 384       # Input feature dimension per node
-# hidden_dims = [256, 128, 64]  # Hidden layer dimensions
-# output_dim = 64       # Output dimension (graph-level embedding)
-# num_layers = 3        # Number of GNN layers
-# graph_model = GraphNet(input_dim, hidden_dims, output_dim, num_layers).to(device)
+class GraphNetWithDINO(nn.Module):
+    def __init__(self, input_dim, hidden_dims, num_layers, dino_head):
+        super(GraphNetWithDINO, self).__init__()
+        
+        self.graph_net = GraphNet(
+            input_dim=input_dim,
+            hidden_dims=hidden_dims,
+            num_layers=num_layers,
+        )
+        self.dino_head = dino_head  # DINOHead instance
+        
+    def forward(self, x, edge_index, batch):
+        # Check if the model is in training mode
+        if self.training:
+            # Training phase: Use GNN layers
+            node_embeddings, global_embedding = self.graph_net(x, edge_index, batch)
+        else:
+            # Inference phase: Skip GNN layers
+            node_embeddings = x  # Use backbone features directly
+            global_embedding = x.mean(dim=0, keepdim=True)  # Optional: Compute a global embedding
+
+        # Apply DINOHead to embeddings
+        node_embeddings = self.dino_head(node_embeddings)
+        global_embedding = self.dino_head(global_embedding)
+
+        return node_embeddings, global_embedding
+    
+        # node_embeddings, global_embedding = self.graph_net(x, edge_index, batch)
+        # # Apply DINOHead to global embedding
+        # node_embeddings = self.dino_head(node_embeddings)
+        # global_embedding = self.dino_head(global_embedding)
+        # return node_embeddings, global_embedding

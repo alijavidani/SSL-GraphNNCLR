@@ -99,7 +99,7 @@ def get_args_parser():
     # Misc
     parser.add_argument('--data_path', default='/home/alij/Datasets/Cifar10', type=str,
                         help='Please specify path to the ImageNet training data.')
-    parser.add_argument('--output_dir', default="./dino_cifar10_7/", type=str, help='Path to save logs and checkpoints.')
+    parser.add_argument('--output_dir', default="./Results/dino_cifar10_dinohead5/", type=str, help='Path to save logs and checkpoints.')
     parser.add_argument('--saveckp_freq', default=20, type=int, help='Save checkpoint every x epochs.')
     parser.add_argument('--seed', default=0, type=int, help='Random seed.')
     parser.add_argument('--num_workers', default=8, type=int, help='Number of data loading workers per GPU.')
@@ -115,7 +115,7 @@ def get_args_parser():
                         choices=['first', 'second', 'mean'],
                         help="""Which representation to use for choosing the nearset neighboor.""")
     parser.add_argument('--topk', type=int, default=10, help="""How many to NN to keep track of.""")
-    parser.add_argument('--vote_nn_nb', type=int, default=2,
+    parser.add_argument('--vote_nn_nb', type=int, default=3,
                         help="""Number of votes from previous epoch to select the nearest neighbor.""")
     parser.add_argument('--sampling_softmax_temp', default=0.001, type=float,
                         help="""Softmax temperature for sampling distribution of NN.""")

@@ -10,16 +10,14 @@ from graph import GraphNet
 class AdaSimLoss(nn.Module):
     def __init__(self, out_dim, ncrops, warmup_teacher_temp, teacher_temp,
                  warmup_teacher_temp_epochs, nepochs, student_temp=0.1,
-                 center_momentum=0.9, teacher_graph_model=None, student_graph_model=None, args=None):
+                 center_momentum=0.9, args=None):
         super().__init__()
         self.student_temp = student_temp
         self.center_momentum = center_momentum
         self.ncrops = ncrops
-        self.teacher_graph_model = teacher_graph_model  # Adding graph model as input
-        self.student_graph_model = student_graph_model  # Adding graph model as input
-        self.register_buffer("center", torch.zeros(1, out_dim))
-        self.register_buffer("node_center", torch.zeros(1, 64))
-        self.register_buffer("global_center", torch.zeros(1, 64))
+        self.register_buffer("center", torch.zeros(1, 192)) # Note
+        self.register_buffer("node_center", torch.zeros(1, out_dim))
+        self.register_buffer("global_center", torch.zeros(1, out_dim))
 
         # Warm-up for teacher temperature
         self.teacher_temp_schedule = np.concatenate((
@@ -28,27 +26,33 @@ class AdaSimLoss(nn.Module):
         ))
         self.args = args
 
-    def forward(self, student_output, teacher_output, epoch, 
-                teacher_graph, student_graph, indices_batch_all):
+    def forward(self, student_output, teacher_output, epoch,
+                teacher_node_embeddings, teacher_global_embedding,
+                student_node_embeddings, student_global_embedding,
+                indices_batch_all):
         """
         Cross-entropy between softmax outputs of the teacher and student networks
         + Graph consistency loss.
         """
-        student_output, student_output_feat = student_output
-        teacher_output, teacher_output_feat = teacher_output
-        teacher_output = teacher_output.detach()
+        # student_output, student_output_feat = student_output
+        # teacher_output, teacher_output_feat = teacher_output
+        # teacher_output = teacher_output.detach()
 
         total_loss = 0
 
         # 1. Graph consistency loss
-        gc_local_loss, gc_global_loss = self.graph_consistency_loss(teacher_graph, student_graph, indices_batch_all, epoch)
-
+        gc_local_loss, gc_global_loss = self.graph_consistency_loss2(
+            teacher_node_embeddings, teacher_global_embedding,
+            student_node_embeddings, student_global_embedding,
+            indices_batch_all, epoch)
+        
         # 2. AdaSim loss
         adasim_loss = self.adasim_loss(student_output, teacher_output, epoch)
 
         # 3. Combine both losses
-        print(f'adasim_loss: {adasim_loss}, gc_local_loss: {gc_local_loss}, gc_global_loss: {gc_global_loss}')
-        total_loss += adasim_loss + gc_global_loss + gc_local_loss
+        # print(f' gc_local_loss: {gc_local_loss}, gc_global_loss: {gc_global_loss}') #adasim_loss: {adasim_loss},
+        total_loss += gc_global_loss + gc_local_loss #+ adasim_loss 
+        # total_loss += adasim_loss 
 
         # 4. Update center
         self.update_center(teacher_output)
@@ -128,22 +132,12 @@ class AdaSimLoss(nn.Module):
         return loss_local, loss_global
 
 
-    def graph_consistency_loss2(self, teacher_graph, student_graph, indices_batch_all, epoch):
+    def graph_consistency_loss2(self, teacher_node_embeddings, teacher_global_embedding,
+                        student_node_embeddings, student_global_embedding,
+                        indices_batch_all, epoch):
         """
         Calculate local and global graph consistency loss using PyTorch Geometric graphs.
         """
-        device = teacher_graph.edge_index.device
-
-        # Batch tensor for global pooling
-        batch = torch.zeros(teacher_graph.num_nodes, dtype=torch.long, device=device)
-
-        # Forward pass through the models
-        student_node_embeddings, student_global_embedding = self.student_graph_model(
-            student_graph.x, student_graph.edge_index, batch)
-
-        with torch.no_grad():
-            teacher_node_embeddings, teacher_global_embedding = self.teacher_graph_model(
-                teacher_graph.x, teacher_graph.edge_index, batch)
 
         # Centering and sharpening for teacher outputs
         teacher_temp = self.teacher_temp_schedule[epoch]
