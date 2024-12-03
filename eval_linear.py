@@ -28,7 +28,7 @@ import utils
 import vision_transformer as vits
 
 os.environ["PL_TORCH_DISTRIBUTED_BACKEND"] = "nccl"
-os.environ["CUDA_VISIBLE_DEVICES"]="2,3"
+os.environ["CUDA_VISIBLE_DEVICES"]="1,2,3"
 
 def eval_linear(args):
     utils.init_distributed_mode(args)
@@ -262,7 +262,7 @@ if __name__ == '__main__':
         We typically set this to False for ViT-Small and to True with ViT-Base.""")
     parser.add_argument('--arch', default='vit_tiny', type=str, help='Architecture')
     parser.add_argument('--patch_size', default=16, type=int, help='Patch resolution of the model.')
-    parser.add_argument('--pretrained_weights', default='/home/alij/SSL-GraphNNCLR/Results/dino_cifar10_dinohead2/checkpoint.pth', type=str, help="Path to pretrained weights to evaluate.")
+    parser.add_argument('--pretrained_weights', default='/home/alij/SSL-GraphNNCLR/Results/dino_cifar10_dinohead_adasimlossonly/checkpoint0020.pth', type=str, help="Path to pretrained weights to evaluate.")
     parser.add_argument("--checkpoint_key", default="teacher", type=str, help='Key to use in the checkpoint (example: "teacher")')
     parser.add_argument('--epochs', default=100, type=int, help='Number of epochs of training.')
     parser.add_argument("--lr", default=0.001, type=float, help="""Learning rate at the beginning of
@@ -276,7 +276,7 @@ if __name__ == '__main__':
     parser.add_argument('--data_path', default='/home/alij/Datasets/Cifar10', type=str)
     parser.add_argument('--num_workers', default=8, type=int, help='Number of data loading workers per GPU.')
     parser.add_argument('--val_freq', default=1, type=int, help="Epoch frequency for validation.")
-    parser.add_argument('--output_dir', default="./Results/eval_linear_cifar103/", help='Path to save logs and checkpoints')
+    parser.add_argument('--output_dir', default="./Eval_Results/eval_linear_cifar10_dinohead_adasimlossonly_checkpoint0020/", help='Path to save logs and checkpoints')
     parser.add_argument('--num_labels', default=10, type=int, help='Number of labels for linear classifier')
     parser.add_argument('--evaluate', dest='evaluate', action='store_true', help='evaluate model on validation set')
     args = parser.parse_args()

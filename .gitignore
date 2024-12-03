@@ -13,3 +13,5 @@ dino_cifar10_5/
 output_cifar10/
 dino_cifar10_5_converge/
 Results/
+runs/
+Eval_Results/

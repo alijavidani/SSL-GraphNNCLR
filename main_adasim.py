@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] ="2"
+os.environ["CUDA_VISIBLE_DEVICES"] ="1,2,3"
 
 import torch
 import argparse
@@ -45,8 +45,9 @@ from graph import *
 from torch_geometric.data import Data
 from augmentation import DataAugmentationDINO
 from torchviz import make_dot
-# from torch.utils.tensorboard import SummaryWriter
-# writer = SummaryWriter()
+from torch.utils.tensorboard import SummaryWriter
+writer = SummaryWriter()
+from combined_model import CombinedModel
 
 torchvision_archs = sorted(name for name in torchvision_models.__dict__
                            if name.islower() and not name.startswith("__")
@@ -166,7 +167,7 @@ def train_adasim(args):
     # Initialize the graph models
     # Note:
     input_dim = embed_dim # Input feature dimension per node
-    hidden_dims = [512, 1024, 512, embed_dim]  # Hidden layer dimensions
+    hidden_dims = [512, embed_dim]  # [512, 1024, 512, embed_dim] Hidden layer dimensions
     # output_dim = hidden_dims[-1]       # Output dimension (graph-level embedding)
     num_layers = len(hidden_dims)        # Number of GNN layers
 
@@ -176,9 +177,6 @@ def train_adasim(args):
         out_dim = args.out_dim,
         use_bn = args.use_bn_in_head,
         norm_last_layer = args.norm_last_layer,
-        # nlayers = 3,
-        # hidden_dim = 2048,
-        # bottleneck_dim = 256
     )
 
     teacher_dino_head = DINOHead(
@@ -186,27 +184,13 @@ def train_adasim(args):
         out_dim = args.out_dim,
         use_bn = args.use_bn_in_head,
         norm_last_layer = args.norm_last_layer,
-        # nlayers = 3,
-        # hidden_dim = 2048,
-        # bottleneck_dim = 256
     )
-    # input_dim = args.out_dim       # Input feature dimension per node
-    # hidden_dims = [50000, 30000, 20000]  # Hidden layer dimensions
-    # output_dim = 20000       # Output dimension (graph-level embedding)
-    # num_layers = 3        # Number of GNN layers
 
     # Student graph model
     student_graph_model = GraphNetWithDINO(input_dim, hidden_dims, num_layers, student_dino_head).cuda()
 
     # Teacher graph model
     teacher_graph_model = GraphNetWithDINO(input_dim, hidden_dims, num_layers, teacher_dino_head).cuda()
-
-    # student = utils.MultiCropWrapper(student, DINOHead(
-    #     embed_dim,
-    #     args.out_dim,
-    #     use_bn=args.use_bn_in_head,
-    #     norm_last_layer=args.norm_last_layer,
-    # ))
 
     # Synchronize batch norms (if any)
     if utils.has_batchnorms(student_graph_model):
@@ -224,15 +208,21 @@ def train_adasim(args):
     # Initialize the teacher graph model with the student's parameters
     teacher_graph_model_without_ddp.load_state_dict(student_graph_model.module.state_dict())
 
-    # Freeze teacher parameters
+    # Freeze teacher graph model parameters
     for p in teacher_graph_model.parameters():
         p.requires_grad = False
 
-    teacher_graph_model.eval()
+    # teacher_graph_model.eval()
 
     print("Student Graph Model and Teacher Graph Model are built and wrapped with DDP.")
 
+    # Create student and teacher instances
+    student_combined_model = CombinedModel(student, student_graph_model, args)
+    teacher_combined_model = CombinedModel(teacher, teacher_graph_model, args)
 
+    # Freeze teacher graph model parameters
+    for p in teacher_combined_model.parameters():
+        p.requires_grad = False
 
     teacher_features_cpu = torch.zeros(len(data_loader.dataset), embed_dim, dtype=torch.float)
     teacher_nn_tensor_cpu = torch.zeros(len(data_loader.dataset), args.topk, dtype=torch.long)
@@ -265,35 +255,6 @@ def train_adasim(args):
     # Ensure the graphs are on the correct device
     teacher_graph = teacher_graph.to(device)
     student_graph = student_graph.to(device)
-    
-    # Add nodes to the graphs
-    # teacher_graph.add_nodes_from(range(len(data_loader.dataset)))
-    # student_graph.add_nodes_from(range(len(data_loader.dataset)))
-
-    # Assuming you have edges to add in the form of a list of tuples (source, target)
-    # edges_to_add = [(0, 1), (1, 2), (2, 3), (3, 4)]  # Example edge list
-
-    # Convert edge list to a cuDF DataFrame
-    # edge_df = cudf.DataFrame(edges_to_add, columns=['source', 'target'])
-
-    # Create a cuGraph Graph
-    # G_cu = cugraph.DiGraph()
-
-    # Add edges to the cuGraph
-    # G_cu.from_cudf_edgelist(edge_df, source='source', destination='target')
-
-    # If you need to convert back to NetworkX
-    # edge_list = G_cu.view_edge_list().to_pandas().to_records(index=False)
-    # teacher_graph.add_edges_from(edges_to_add)
-
-    # Now teacher_graph has the edges added
-    # print(teacher_graph.edges())
-
-    # edge_weights = {}  # Dictionary to store edge weights
-    # if not graph.es.attribute_names().count("weight"):
-    #     graph.es["weight"] = [0] * len(graph.es)  # Initialize all to 0 if 'weight' doesn't exist
-    # vertex_labels = [str(index) for index in range(graph.vcount())]
-    # temp_file = 'temp_graph_with_labels.png'
 
     # ============ preparing loss ... ============
     adasim_loss = AdaSimLoss(
@@ -302,11 +263,11 @@ def train_adasim(args):
         args.warmup_teacher_temp,
         args.teacher_temp,
         args.warmup_teacher_temp_epochs,
-        args.epochs, args=args
+        args.epochs, args=args, writer=writer
     ).cuda()
 
     # ============ preparing optimizer ... ============
-    params_groups = utils.get_params_groups([student, student_graph_model])#, graph_model
+    params_groups = utils.get_params_groups(student_combined_model)#, graph_model
     if args.optimizer == "adamw":
         optimizer = torch.optim.AdamW(params_groups)  # to use with ViTs
     elif args.optimizer == "sgd":
@@ -350,7 +311,11 @@ def train_adasim(args):
                   "student_nn_matrix_cpu": student_nn_matrix_cpu,
                   "student_sim_matrix_cpu": student_sim_matrix_cpu,
                   "teacher_graph": teacher_graph,
-                  "student_graph": student_graph
+                  "student_graph": student_graph,
+                  "optimizer": optimizer,
+                #   "node_center": adasim_loss.node_center,
+                #   "global_center": adasim_loss.global_center,
+                #   "center": adasim_loss.center
                   }
     default_checkpoint_path = os.path.join(args.output_dir, "checkpoint.pth")
     if not os.path.isfile(default_checkpoint_path) and os.path.isfile(args.start_checkpoint_path):
@@ -364,6 +329,10 @@ def train_adasim(args):
             run_variables=to_restore,
             student=student,
             teacher=teacher,
+            student_graph_model=student_graph_model,
+            teacher_graph_model=teacher_graph_model,
+            student_combined_model=student_combined_model,
+            teacher_combined_model=teacher_combined_model,
             optimizer=optimizer,
             fp16_scaler=fp16_scaler,
             adasim_loss=adasim_loss,
@@ -375,6 +344,10 @@ def train_adasim(args):
             run_variables=to_restore,
             student=student,
             teacher=teacher,
+            student_graph_model=student_graph_model,
+            teacher_graph_model=teacher_graph_model,
+            student_combined_model=student_combined_model,
+            teacher_combined_model=teacher_combined_model,
             optimizer=optimizer,
             fp16_scaler=fp16_scaler,
             adasim_loss=adasim_loss,
@@ -394,6 +367,8 @@ def train_adasim(args):
 
     teacher_graph = to_restore["teacher_graph"]
     student_graph = to_restore["student_graph"]
+ 
+    # optimizer=to_restore['optimizer']
     
     # Ensure the graphs are on the correct device
     teacher_graph = teacher_graph.to(device)
@@ -434,7 +409,7 @@ def train_adasim(args):
         try:
             # ============ training one epoch of DINO ... ============
 
-            train_stats = train_one_epoch(student, teacher, teacher_without_ddp, student_graph_model, teacher_graph_model, teacher_graph_model_without_ddp, adasim_loss,
+            train_stats = train_one_epoch(student_combined_model, teacher_combined_model, student, teacher, teacher_without_ddp, student_graph_model, teacher_graph_model, teacher_graph_model_without_ddp, adasim_loss,
                                           data_loader, optimizer, lr_schedule, wd_schedule, momentum_schedule, graph_momentum_schedule,
                                           epoch, fp16_scaler, teacher_features, teacher_nn_tensor, teacher_sim_tensor, bootstrap_myself_tensor,
                                           teacher_graph, args, student_features, student_nn_tensor, student_sim_tensor, student_graph, teacher_nn_matrix_cpu_flag)
@@ -458,7 +433,11 @@ def train_adasim(args):
         # ============ writing logs ... ============
         save_dict = {
             'student': student.state_dict(),
-            'teacher': teacher.state_dict(),
+            'teacher': teacher.state_dict(),            
+            'teacher_graph_model': teacher_graph_model.state_dict(),
+            'student_graph_model': student_graph_model.state_dict(),
+            'teacher_combined_model': teacher_combined_model.state_dict(),
+            'student_combined_model': student_combined_model.state_dict(),
             'optimizer': optimizer.state_dict(),
             'epoch': epoch + 1,
             'args': args,
@@ -468,9 +447,15 @@ def train_adasim(args):
             'teacher_features_cpu': teacher_features_cpu,
             'teacher_nn_matrix_cpu': teacher_nn_matrix_cpu,
             'teacher_sim_matrix_cpu': teacher_sim_matrix_cpu,
+            'student_nn_tensor_cpu': student_nn_tensor_cpu,
+            'student_sim_tensor_cpu': student_sim_tensor_cpu,
+            'student_features_cpu': student_features_cpu,
+            'student_nn_matrix_cpu': student_nn_matrix_cpu,
+            'student_sim_matrix_cpu': student_sim_matrix_cpu,
             'teacher_graph': teacher_graph,
             'student_graph': student_graph
         }
+
         if fp16_scaler is not None:
             save_dict['fp16_scaler'] = fp16_scaler.state_dict()
         utils.save_on_master(save_dict, os.path.join(args.output_dir, 'checkpoint.pth'))
@@ -487,14 +472,19 @@ def train_adasim(args):
                          'nn_self_accuracy_top1': get_nn_self_accuracy(teacher_nn_tensor_cpu[:, 0]),
                          'nn_self_accuracy_top2': get_nn_self_accuracy(teacher_nn_tensor_cpu[:, 1]),
                          'nn_ratio_self': bootstrap_myself_tensor.sum().item() / len(bootstrap_myself_tensor)}
+            writer.add_scalar('nn_accuracy_top1', log_stats['nn_accuracy_top1'], epoch)
+            writer.add_scalar('nn_accuracy_top2', log_stats['nn_accuracy_top2'], epoch)
+            writer.add_scalar('nn_self_accuracy_top1', log_stats['nn_self_accuracy_top1'], epoch)
+            writer.add_scalar('nn_self_accuracy_top2', log_stats['nn_self_accuracy_top2'], epoch)
+            writer.add_scalar('nn_ratio_self', log_stats['nn_ratio_self'], epoch)
         if utils.is_main_process():
             with (Path(args.output_dir) / "log.txt").open("a") as f:
                 f.write(json.dumps(log_stats) + "\n")
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     print('Training time {}'.format(total_time_str))
-    print(f"Number of edges in the teacher graph: {teacher_graph.edge_index.size(1)}")
-    print(f"Number of edges in the student graph: {student_graph.edge_index.size(1)}")
+    # print(f"Number of edges in the teacher graph: {teacher_graph.edge_index.size(1)}")
+    # print(f"Number of edges in the student graph: {student_graph.edge_index.size(1)}")
 
 def get_nn_acuracy(dataset, nn_tensor):
     t = torch.Tensor(dataset.targets)
@@ -503,6 +493,47 @@ def get_nn_acuracy(dataset, nn_tensor):
 
 def get_nn_self_accuracy(nn_tensor):
     return sum(nn_tensor == torch.Tensor(range(len(nn_tensor)))).item() / len(nn_tensor)
+
+
+def update_state(feats_local, indices_local, sims_knn_local, indices_knn_local,features, nn_tensor, sim_tensor, same_im_bool, bootstrap_myself_tensor, requires_grad):
+    if not requires_grad:
+        with torch.no_grad():
+            _update_state_inner(feats_local, indices_local, sims_knn_local, indices_knn_local,features, nn_tensor, sim_tensor, same_im_bool, bootstrap_myself_tensor)
+    else:
+        _update_state_inner(feats_local, indices_local, sims_knn_local, indices_knn_local,features, nn_tensor, sim_tensor, same_im_bool, bootstrap_myself_tensor)
+
+def _update_state_inner(feats_local, indices_local, sims_knn_local, indices_knn_local,features, nn_tensor, sim_tensor, same_im_bool, bootstrap_myself_tensor):
+        # feats_local = F.normalize(teacher_output[1].reshape(2, -1, teacher_output[1].shape[-1]), p=2, dim=-1)
+        # if args.nn_rep_type == "mean":
+        #     feats_local = feats_local.mean(dim=0)
+        #     feats_local = F.normalize(feats_local, p=2, dim=-1)
+        # elif args.nn_rep_type == "first":
+        #     feats_local = feats_local[0]
+        # elif args.nn_rep_type == "second":
+        #     feats_local = feats_local[1]
+        # else:
+        #     raise NotImplemented
+
+        # Compute knn
+        # similarity = feats_local @ features.T
+        # sims_knn_local, indices_knn_local = similarity.topk(dim=-1, k=args.topk)
+
+        indices_batch_all = gather_all_gpus(indices_local)
+        features_batch_all = gather_all_gpus(feats_local)
+        indices_knn_batch_all = gather_all_gpus(indices_knn_local)
+        sims_knn_batch_all = gather_all_gpus(sims_knn_local)
+
+        # Convert feats_local to the same type as features
+        feats_local = feats_local.to(features.dtype)
+        features_batch_all = features_batch_all.to(features.dtype)
+        sims_knn_batch_all = sims_knn_batch_all.to(sim_tensor.dtype)
+
+        features.index_copy_(0, indices_batch_all, features_batch_all)
+        nn_tensor.index_copy_(0, indices_batch_all, indices_knn_batch_all)
+        sim_tensor.index_copy_(0, indices_batch_all, sims_knn_batch_all)
+
+        # Same as above but for cpu tensor
+        bootstrap_myself_tensor[indices_batch_all.cpu()] = gather_all_gpus(same_im_bool).cpu()
 
 
 def update_nn(nn_tensor_cpu, sim_tensor_cpu, nn_matrix_cpu, sim_matrix_cpu):
@@ -524,147 +555,7 @@ def gather_all_gpus(local_tensor):
     return torch.cat(output_l)
 
 
-def update_graph_and_state(teacher_output, indices_local, features, nn_tensor, sim_tensor, bootstrap_myself_tensor, same_im_bool, graph, teacher_nn_matrix_cpu_flag, requires_grad, args):
-    if not requires_grad:
-        # Use torch.no_grad() only when gradients are not required (for teacher)
-        with torch.no_grad():
-            teacher_output = teacher_output.detach()  # Ensure teacher output is detached
-            # Rest of the code remains the same for teacher
-            return _update_graph_and_state_inner(teacher_output, indices_local, features, nn_tensor, sim_tensor, bootstrap_myself_tensor, same_im_bool, graph, teacher_nn_matrix_cpu_flag, args)
-    else:
-        # For student, do not use torch.no_grad()
-        return _update_graph_and_state_inner(teacher_output, indices_local, features, nn_tensor, sim_tensor, bootstrap_myself_tensor, same_im_bool, graph, teacher_nn_matrix_cpu_flag, args)
-
-
-def _update_graph_and_state_inner(teacher_output, indices_local, features, nn_tensor, sim_tensor, bootstrap_myself_tensor, same_im_bool, graph, teacher_nn_matrix_cpu_flag, args):
-    # Note Be careful about teacher_output[0]:
-    feats_local = F.normalize(teacher_output.reshape(2, -1, teacher_output.shape[-1]), p=2, dim=-1)
-    if args.nn_rep_type == "mean":
-        feats_local = feats_local.mean(dim=0)
-        feats_local = F.normalize(feats_local, p=2, dim=-1)
-    elif args.nn_rep_type == "first":
-        feats_local = feats_local[0]
-    elif args.nn_rep_type == "second":
-        feats_local = feats_local[1]
-    else:
-        raise NotImplemented
-
-    # Compute knn
-    similarity = feats_local @ features.T
-    sims_knn_local, indices_knn_local = similarity.topk(dim=-1, k=args.topk)
-
-    indices_batch_all = gather_all_gpus(indices_local)
-    features_batch_all = gather_all_gpus(feats_local)
-    indices_knn_batch_all = gather_all_gpus(indices_knn_local)
-    sims_knn_batch_all = gather_all_gpus(sims_knn_local)
-
-    # Convert feats_local to the same type as features
-    feats_local = feats_local.to(features.dtype)
-    features_batch_all = features_batch_all.to(features.dtype)
-    sims_knn_batch_all = sims_knn_batch_all.to(sim_tensor.dtype)
-
-    features.index_copy_(0, indices_batch_all, features_batch_all).cpu()
-    nn_tensor.index_copy_(0, indices_batch_all, indices_knn_batch_all).cpu()
-    sim_tensor.index_copy_(0, indices_batch_all, sims_knn_batch_all).cpu()
-    bootstrap_myself_tensor[indices_batch_all.cpu()] = gather_all_gpus(same_im_bool).cpu()
-
-    if teacher_nn_matrix_cpu_flag:
-        # Create edge indices
-        src_nodes = indices_batch_all.unsqueeze(1).repeat(1, args.edges_per_node).flatten()
-        dst_nodes = indices_knn_batch_all[:, :args.edges_per_node].flatten()
-        edge_index_new = torch.stack([src_nodes, dst_nodes], dim=0)
-
-        # Update the graph's edge_index
-        graph.edge_index = torch.cat([graph.edge_index.to(edge_index_new.device), edge_index_new], dim=1)
-
-        # Implement fixed-size global edge buffer
-        # Define E_max (maximum number of edges)
-        num_nodes = graph.x.size(0)
-        E_max = num_nodes * args.edges_per_node *args.vote_nn_nb  # args.w is the desired average number of edges per node
-
-        # Check if total number of edges exceeds E_max
-        num_edges = graph.edge_index.size(1)
-        if num_edges > E_max:
-            # Number of edges to remove
-            num_edges_to_remove = num_edges - E_max
-            # Remove the oldest edges from the beginning
-            graph.edge_index = graph.edge_index[:, num_edges_to_remove:]
-
-        # Optionally, update node features in the graph
-        graph.x[indices_batch_all] = features_batch_all
-
-
-def update_state(indices_batch_all, features_batch_all, indices_knn_batch_all, sims_knn_batch_all, \
-                 features, nn_tensor, sim_tensor, bootstrap_myself_tensor, same_im_bool):
-    # Ensure features_batch_all and features have the same dtype
-    features_batch_all = features_batch_all.to(features.dtype)
-    sims_knn_batch_all = sims_knn_batch_all.to(sim_tensor.dtype)
-
-    features.index_copy_(0, indices_batch_all, features_batch_all).cpu()
-    nn_tensor.index_copy_(0, indices_batch_all, indices_knn_batch_all).cpu()
-    sim_tensor.index_copy_(0, indices_batch_all, sims_knn_batch_all).cpu()
-    bootstrap_myself_tensor[indices_batch_all.cpu()] = gather_all_gpus(same_im_bool).cpu()
-
-
-def update_graph(teacher_output, indices_local, features, nn_tensor, sim_tensor, bootstrap_myself_tensor, same_im_bool, graph, teacher_nn_matrix_cpu_flag, args):
-    with torch.no_grad():
-        # Note Be careful about teacher_output[0]:
-        feats_local = F.normalize(teacher_output.reshape(2, -1, teacher_output.shape[-1]), p=2, dim=-1)
-        if args.nn_rep_type == "mean":
-            feats_local = feats_local.mean(dim=0)
-            feats_local = F.normalize(feats_local, p=2, dim=-1)
-        elif args.nn_rep_type == "first":
-            feats_local = feats_local[0]
-        elif args.nn_rep_type == "second":
-            feats_local = feats_local[1]
-        else:
-            raise NotImplemented
-        
-        # Convert feats_local to the same type as features
-        feats_local = feats_local.to(features.dtype)
-
-        # Compute knn
-        similarity = feats_local @ features.T
-        sims_knn_local, indices_knn_local = similarity.topk(dim=-1, k=args.topk)
-
-        indices_batch_all = gather_all_gpus(indices_local)
-        features_batch_all = gather_all_gpus(feats_local)
-        indices_knn_batch_all = gather_all_gpus(indices_knn_local)
-        sims_knn_batch_all = gather_all_gpus(sims_knn_local)
-
-        # features.index_copy_(0, indices_batch_all, features_batch_all)
-        # nn_tensor.index_copy_(0, indices_batch_all, indices_knn_batch_all)
-        # sim_tensor.index_copy_(0, indices_batch_all, sims_knn_batch_all)
-
-        if teacher_nn_matrix_cpu_flag:
-            # Create edge indices
-            src_nodes = indices_batch_all.unsqueeze(1).repeat(1, args.edges_per_node).flatten()
-            dst_nodes = indices_knn_batch_all[:, :args.edges_per_node].flatten()
-            edge_index_new = torch.stack([src_nodes, dst_nodes], dim=0)
-
-            # Update the graph's edge_index
-            graph.edge_index = torch.cat([graph.edge_index.to(edge_index_new.device), edge_index_new], dim=1)
-
-            # Implement fixed-size global edge buffer
-            # Define E_max (maximum number of edges)
-            num_nodes = graph.x.size(0)
-            E_max = num_nodes * args.edges_per_node *args.vote_nn_nb  # args.w is the desired average number of edges per node
-
-            # Check if total number of edges exceeds E_max
-            num_edges = graph.edge_index.size(1)
-            if num_edges > E_max:
-                # Number of edges to remove
-                num_edges_to_remove = num_edges - E_max
-                # Remove the oldest edges from the beginning
-                graph.edge_index = graph.edge_index[:, num_edges_to_remove:]
-
-            # Optionally, update node features in the graph
-            graph.x[indices_batch_all] = features_batch_all
-
-        return indices_batch_all, features_batch_all, indices_knn_batch_all, sims_knn_batch_all
-
-
-def train_one_epoch(student, teacher, teacher_without_ddp, student_graph_model, teacher_graph_model, teacher_graph_model_without_ddp, adasim_loss, data_loader,
+def train_one_epoch(student_combined_model, teacher_combined_model, student, teacher, teacher_without_ddp, student_graph_model, teacher_graph_model, teacher_graph_model_without_ddp, adasim_loss, data_loader,
                     optimizer, lr_schedule, wd_schedule, momentum_schedule, graph_momentum_schedule, epoch, fp16_scaler,
                     teacher_features, teacher_nn_tensor, teacher_sim_tensor, bootstrap_myself_tensor, teacher_graph, args,
                     student_features, student_nn_tensor, student_sim_tensor, student_graph, teacher_nn_matrix_cpu_flag):
@@ -685,57 +576,43 @@ def train_one_epoch(student, teacher, teacher_without_ddp, student_graph_model, 
         same_im_bool = same_im_bool.cuda(non_blocking=True)
         # teacher and student forward passes + compute dino loss
         with torch.cuda.amp.autocast(fp16_scaler is not None):
-            teacher_output = teacher(images[:2])  # only the 2 global views pass through the teacher
-            student_output = student(images)
-            
-            #Update Teacher and Student Graphs:
-            # teacher_indices_batch_all, teacher_features_batch_all, teacher_indices_knn_batch_all, teacher_sims_knn_batch_all = update_graph(teacher_output, indices, teacher_features, teacher_nn_tensor, teacher_sim_tensor, same_im_bool, bootstrap_myself_tensor,
-            #             teacher_graph, teacher_nn_matrix_cpu_flag, args)
-            # student_indices_batch_all, student_features_batch_all, student_indices_knn_batch_all, student_sims_knn_batch_all = update_graph(student_output, indices, student_features, student_nn_tensor, student_sim_tensor, same_im_bool, bootstrap_myself_tensor,
-            #             student_graph, teacher_nn_matrix_cpu_flag, args)
+            # Forward pass through teacher model
+            teacher_output, teacher_node_embeddings, teacher_global_embedding, teacher_graph, teacher_sims_knn_local, teacher_indices_knn_local, teacher_feats_local = teacher_combined_model(
+                images, indices, same_im_bool, teacher_features, teacher_nn_tensor,
+                teacher_sim_tensor, bootstrap_myself_tensor, teacher_graph,
+                teacher_nn_matrix_cpu_flag, is_student=False, fp16_scaler=fp16_scaler
+            )
 
-            # print(f"Number of edges in the teacher graph: {teacher_graph.edge_index.size(1)}")
-            # print(f"Number of edges in the student graph: {student_graph.edge_index.size(1)}")
+            # Forward pass through student model
+            student_output, student_node_embeddings, student_global_embedding, student_graph, student_sims_knn_local, student_indices_knn_local, student_feats_local = student_combined_model(
+                images, indices, same_im_bool, student_features, student_nn_tensor,
+                student_sim_tensor, bootstrap_myself_tensor, student_graph,
+                teacher_nn_matrix_cpu_flag, is_student=True, fp16_scaler=fp16_scaler
+            )
 
-            # update_state(teacher_indices_batch_all, teacher_features_batch_all, teacher_indices_knn_batch_all, teacher_sims_knn_batch_all,\
-            #             teacher_features, teacher_nn_tensor, teacher_sim_tensor, bootstrap_myself_tensor, same_im_bool)
-            # update_state(student_indices_batch_all, student_features_batch_all, student_indices_knn_batch_all, student_sims_knn_batch_all,\
-            #             student_features, student_nn_tensor, student_sim_tensor, bootstrap_myself_tensor, same_im_bool)
+            writer.add_scalar('teacher_graph_edges', teacher_graph.edge_index.size(1), it)
+            writer.add_scalar('student_graph_edges', student_graph.edge_index.size(1), it)
 
-            update_graph_and_state(teacher_output, indices, teacher_features, teacher_nn_tensor, teacher_sim_tensor, bootstrap_myself_tensor, same_im_bool, teacher_graph, teacher_nn_matrix_cpu_flag, False, args)
-            update_graph_and_state(student_output, indices, student_features, student_nn_tensor, student_sim_tensor, bootstrap_myself_tensor, same_im_bool, student_graph, teacher_nn_matrix_cpu_flag, True, args)
+            print(f"Number of edges in the teacher graph: {teacher_graph.edge_index.size(1)}")
+            print(f"Number of edges in the student graph: {student_graph.edge_index.size(1)}")
 
-            # Forward pass through graph models
-            device = teacher_graph.x.device
-            batch = torch.zeros(teacher_graph.num_nodes, dtype=torch.long, device=device)
-
-            # Student graph model forward pass
-            student_node_embeddings, student_global_embedding = student_graph_model(
-                student_graph.x, student_graph.edge_index, batch)
-
-            # Teacher graph model forward pass (without gradients)
-            with torch.no_grad():
-                teacher_node_embeddings, teacher_global_embedding = teacher_graph_model(
-                    teacher_graph.x, teacher_graph.edge_index, batch)
-
-            # Calculate the loss, passing all necessary outputs
+            # Compute loss
             loss = adasim_loss(
-                student_output, teacher_output, epoch,
+                student_output, teacher_output, epoch, it,
                 teacher_node_embeddings, teacher_global_embedding,
                 student_node_embeddings, student_global_embedding,
                 indices  # Passing indices as indices_batch_all
             )
+        
+            # dot = make_dot(loss, params=dict(student_combined_model.named_parameters()))
+            # dot.render("computation_graph_gcloss", format="png")
+            # exit()
+            # break
 
-            # loss = adasim_loss(student_output, teacher_output, epoch, teacher_graph, student_graph, indices)
-
-
-            # **Move the visualization code here, before backward pass**
-            params = dict(student.named_parameters())
-            params.update(dict(student_graph_model.named_parameters()))
-            dot = make_dot(loss, params=params)
-            # dot = make_dot(loss, params=dict(student.named_parameters()))
-            dot.render("computation_graph", format="png")
-            exit()  # Exit after rendering the graph to prevent further execution
+            # Register hooks
+            # student_output.register_hook(grad_hook('student_output'))
+            # student_graph.x.register_hook(grad_hook('student_graph.x'))
+            # student_node_embeddings.register_hook(grad_hook('student_node_embeddings'))
 
         if not math.isfinite(loss.item()):
             print("Loss is {}, stopping training".format(loss.item()), force=True)
@@ -748,36 +625,65 @@ def train_one_epoch(student, teacher, teacher_without_ddp, student_graph_model, 
         if fp16_scaler is None:
             loss.backward()
             if args.clip_grad:
-                param_norms = utils.clip_gradients(student, args.clip_grad)
-            utils.cancel_gradients_last_layer(epoch, student,
+                param_norms = utils.clip_gradients(student_combined_model, args.clip_grad)
+            utils.cancel_gradients_last_layer(epoch, student_combined_model,
                                               args.freeze_last_layer)
             optimizer.step()
         else:
             fp16_scaler.scale(loss).backward()
             if args.clip_grad:
                 fp16_scaler.unscale_(optimizer)  # unscale the gradients of optimizer's assigned params in-place
-                param_norms = utils.clip_gradients(student, args.clip_grad)
-            utils.cancel_gradients_last_layer(epoch, student,
+                param_norms = utils.clip_gradients(student_combined_model, args.clip_grad)
+            utils.cancel_gradients_last_layer(epoch, student_combined_model,
                                               args.freeze_last_layer)
             fp16_scaler.step(optimizer)
             fp16_scaler.update()
 
+        teacher_graph.x = teacher_graph.x.detach()
+        teacher_graph.edge_index = teacher_graph.edge_index.detach()
+        student_graph.x = student_graph.x.detach()
+        student_graph.edge_index = student_graph.edge_index.detach()
 
-        # # Backward pass for the graph models
-        # if fp16_scaler is None:
-        #     graph_loss.backward()
-        #     if args.clip_grad:
-        #         param_norms = utils.clip_gradients(student_graph_model, args.clip_grad)
-        #     utils.cancel_gradients_last_layer(epoch, student_graph_model, args.freeze_last_layer)
-        #     optimizer.step()  # Update student graph model
-        # else:
-        #     fp16_scaler.scale(graph_loss).backward()
-        #     if args.clip_grad:
-        #         fp16_scaler.unscale_(optimizer)
-        #         param_norms = utils.clip_gradients(student_graph_model, args.clip_grad)
-        #     utils.cancel_gradients_last_layer(epoch, student_graph_model, args.freeze_last_layer)
-        #     fp16_scaler.step(optimizer)
-        #     fp16_scaler.update()
+        teacher_features = teacher_features.detach()
+        student_features = student_features.detach()
+        teacher_nn_tensor = teacher_nn_tensor.detach()
+        student_nn_tensor = student_nn_tensor.detach()
+        teacher_sim_tensor = teacher_sim_tensor.detach()
+        student_sim_tensor = student_sim_tensor.detach()
+        bootstrap_myself_tensor = bootstrap_myself_tensor.detach()
+
+        # for name, param in student_combined_model.named_parameters():
+        #     if param.grad is not None:
+        #         num_elements = param.grad.numel()
+        #         print(f"Parameter '{name}' gradient has {num_elements} elements.")
+        #         if num_elements > 0:
+        #             if torch.isnan(param.grad).any():
+        #                 print(f"Parameter '{name}' gradient contains NaN values, skipping histogram.")
+        #             elif torch.isinf(param.grad).any():
+        #                 print(f"Parameter '{name}' gradient contains Inf values, skipping histogram.")
+        #             elif torch.all(param.grad == 0):
+        #                 print(f"Parameter '{name}' gradient is all zeros, skipping histogram.")
+        #             else:
+        #                 # Check if gradient is sparse
+        #                 if param.grad.is_sparse:
+        #                     grad = param.grad.to_dense()
+        #                 else:
+        #                     grad = param.grad
+        #                 writer.add_histogram(f"{name}_grad", grad, it)
+        #         else:
+        #             print(f"Skipping histogram for '{name}' because it has an empty gradient.")
+
+        # for name, param in student_combined_model.named_parameters():
+        #     if param.grad is not None:
+        #         print(f'{name}: {param.grad.norm()}')
+        #     else:
+        #         print(f'{name} has no gradient')
+
+        # for name, param in teacher_combined_model.named_parameters():
+        #     if param.grad is not None:
+        #         print(f'{name}: {param.grad.norm()}')
+        #     else:
+        #         print(f'{name} has no gradient')
 
         # EMA update for the teacher
         with torch.no_grad():
@@ -790,19 +696,20 @@ def train_one_epoch(student, teacher, teacher_without_ddp, student_graph_model, 
             for param_q, param_k in zip(student_graph_model.module.parameters(), teacher_graph_model_without_ddp.parameters()):
                 param_k.data.mul_(m_graph).add_((1 - m_graph) * param_q.detach().data)
                 
-        # update_state(teacher_indices_batch_all, teacher_features_batch_all, teacher_indices_knn_batch_all, teacher_sims_knn_batch_all,\
-        #             teacher_features, teacher_nn_tensor, teacher_sim_tensor, bootstrap_myself_tensor, same_im_bool)
-        # update_state(student_indices_batch_all, student_features_batch_all, student_indices_knn_batch_all, student_sims_knn_batch_all,\
-        #             student_features, student_nn_tensor, student_sim_tensor, bootstrap_myself_tensor, same_im_bool)
 
+        update_state(teacher_feats_local, indices, teacher_sims_knn_local, teacher_indices_knn_local, teacher_features, teacher_nn_tensor, teacher_sim_tensor, same_im_bool, bootstrap_myself_tensor,
+                     requires_grad=False)
+        update_state(student_feats_local, indices, student_sims_knn_local, student_indices_knn_local, student_features, student_nn_tensor, student_sim_tensor, same_im_bool, bootstrap_myself_tensor,
+                     requires_grad=True)
+        
         # After loss.backward()
-        # for name, param in student.named_parameters():
+        # for name, param in student_combined_model.named_parameters():
         #     if param.grad is not None:
-        #         writer.add_histogram(f"{name}_grad", param.grad, global_step)
+        #         writer.add_histogram(f"{name}_grad", param.grad, it)
 
 
-        # # Visualize the computation graph
-        # dot = make_dot(loss, params=dict(student.named_parameters()))
+        # Visualize the computation graph
+        # dot = make_dot(loss, params=dict(student_combined_model.named_parameters()))
         # dot.render("computation_graph", format="png")
         # exit()
 
@@ -815,6 +722,11 @@ def train_one_epoch(student, teacher, teacher_without_ddp, student_graph_model, 
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger)
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+
+def grad_hook(name):
+    def hook(grad):
+        print(f'Gradient at {name}: {grad.norm()}')
+    return hook
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('DINO', parents=[get_args_parser()])

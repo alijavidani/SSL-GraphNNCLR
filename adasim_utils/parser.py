@@ -68,7 +68,7 @@ def get_args_parser():
         help optimization for larger ViT architectures. 0 for disabling.""")
     parser.add_argument('--batch_size_per_gpu', default=10, type=int,
                         help='Per-GPU batch-size : number of distinct images loaded on one GPU.')
-    parser.add_argument('--epochs', default=100, type=int, help='Number of epochs of training.')
+    parser.add_argument('--epochs', default=150, type=int, help='Number of epochs of training.')
     parser.add_argument('--freeze_last_layer', default=1, type=int, help="""Number of epochs
         during which we keep the output layer fixed. Typically doing so during
         the first epoch helps training. Try increasing this value if the loss does not decrease.""")
@@ -99,7 +99,7 @@ def get_args_parser():
     # Misc
     parser.add_argument('--data_path', default='/home/alij/Datasets/Cifar10', type=str,
                         help='Please specify path to the ImageNet training data.')
-    parser.add_argument('--output_dir', default="./Results/dino_cifar10_dinohead5/", type=str, help='Path to save logs and checkpoints.')
+    parser.add_argument('--output_dir', default="./Results/dino_cifar10_dinohead10/", type=str, help='Path to save logs and checkpoints.')
     parser.add_argument('--saveckp_freq', default=20, type=int, help='Save checkpoint every x epochs.')
     parser.add_argument('--seed', default=0, type=int, help='Random seed.')
     parser.add_argument('--num_workers', default=8, type=int, help='Number of data loading workers per GPU.')
@@ -119,5 +119,5 @@ def get_args_parser():
                         help="""Number of votes from previous epoch to select the nearest neighbor.""")
     parser.add_argument('--sampling_softmax_temp', default=0.001, type=float,
                         help="""Softmax temperature for sampling distribution of NN.""")
-    parser.add_argument('--edges_per_node', type=int, default=5, help="""How many to NN to keep track of.""")
+    parser.add_argument('--edges_per_node', type=int, default=2, help="""How many to NN to keep track of.""")
     return parser

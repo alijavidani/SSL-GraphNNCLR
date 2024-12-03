@@ -58,9 +58,3 @@ class GraphNetWithDINO(nn.Module):
         global_embedding = self.dino_head(global_embedding)
 
         return node_embeddings, global_embedding
-    
-        # node_embeddings, global_embedding = self.graph_net(x, edge_index, batch)
-        # # Apply DINOHead to global embedding
-        # node_embeddings = self.dino_head(node_embeddings)
-        # global_embedding = self.dino_head(global_embedding)
-        # return node_embeddings, global_embedding
