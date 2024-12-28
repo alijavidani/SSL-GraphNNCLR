@@ -11,7 +11,7 @@
             "request": "launch",
             // "module": "main_adasim",
             "program": "/home/alij/dino_virtual_env/bin/torchrun",
-            "args": ["--nproc_per_node","1", "main_adasim.py"],
+            "args": ["--nproc_per_node","3", "main_adasim.py"],
             "justMyCode": true
         }
     ]

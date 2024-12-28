@@ -15,7 +15,7 @@ class AdaSimLoss(nn.Module):
         self.student_temp = student_temp
         self.center_momentum = center_momentum
         self.ncrops = ncrops
-        self.register_buffer("center", torch.zeros(1, 192)) # Note
+        self.register_buffer("center", torch.zeros(1, 768)) # Note
         self.register_buffer("node_center", torch.zeros(1, out_dim))
         self.register_buffer("global_center", torch.zeros(1, out_dim))
 
@@ -42,10 +42,10 @@ class AdaSimLoss(nn.Module):
         total_loss = 0
 
         # 1. Graph consistency loss
-        gc_local_loss, gc_global_loss = self.graph_consistency_CE_loss(
-            teacher_node_embeddings, teacher_global_embedding,
-            student_node_embeddings, student_global_embedding,
-            indices, epoch)
+        # gc_local_loss, gc_global_loss = self.graph_consistency_CE_loss(
+        #     teacher_node_embeddings, teacher_global_embedding,
+        #     student_node_embeddings, student_global_embedding,
+        #     indices, epoch)
 
         # gc_local_loss2, gc_global_loss2 = self.graph_consistency_KL_loss(
         #     teacher_node_embeddings, teacher_global_embedding,
@@ -56,15 +56,16 @@ class AdaSimLoss(nn.Module):
         adasim_loss = self.adasim_loss(student_output, teacher_output, epoch)
 
         # 3. Combine both losses
-        print(f'gc_local_loss: {gc_local_loss}, gc_global_loss: {gc_global_loss}') #adasim_loss: {adasim_loss}, 
+        print(f'adasim_loss: {adasim_loss}') #adasim_loss: {adasim_loss}, 
+       # print(f'gc_local_loss: {gc_local_loss}, gc_global_loss: {gc_global_loss}') #adasim_loss: {adasim_loss}, 
         # print(f'gc_local_loss2: {gc_local_loss}, gc_global_loss2: {gc_global_loss}') #adasim_loss: {adasim_loss}, 
-        self.writer.add_scalar('adasim_loss', adasim_loss, it)
-        self.writer.add_scalar('gc_local_loss', gc_local_loss, it)
-        self.writer.add_scalar('gc_global_loss', gc_global_loss, it)
+        # self.writer.add_scalar('adasim_loss', adasim_loss, it)
+        # self.writer.add_scalar('gc_local_loss', gc_local_loss, it)
+        # self.writer.add_scalar('gc_global_loss', gc_global_loss, it)
         # self.writer.add_scalar('gc_local_loss2', gc_local_loss2, it)
         # self.writer.add_scalar('gc_global_loss2', gc_global_loss2, it)
         total_loss += adasim_loss 
-        total_loss += gc_local_loss #+ gc_local_loss2 # gc_global_loss +
+        # total_loss += gc_local_loss #+ gc_local_loss2 # gc_global_loss +
 
         # 4. Update center
         self.update_centers(teacher_output, teacher_node_embeddings, teacher_global_embedding)
