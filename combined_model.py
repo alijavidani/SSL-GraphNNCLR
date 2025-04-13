@@ -4,10 +4,10 @@ import torch.nn.functional as F
 import torch.distributed as dist
 
 class CombinedModel(nn.Module):
-    def __init__(self, backbone_model, graph_model, args):
+    def __init__(self, backbone_model, args): #, graph_model
         super(CombinedModel, self).__init__()
         self.backbone = backbone_model
-        self.graph_model = graph_model
+        # self.graph_model = graph_model
         self.args = args
 
         # Initialize any additional required components or state variables here
@@ -17,7 +17,7 @@ class CombinedModel(nn.Module):
                 sim_tensor, bootstrap_myself_tensor, graph,
                 nn_matrix_cpu_flag, is_student=True, fp16_scaler=None):
         # Process images through the backbone model
-        output = self.backbone(images)
+        output, head_output = self.backbone(images)
 
         # Update graph and state
         graph, sims_knn_local, indices_knn_local, feats_local = update_graph(
@@ -25,21 +25,21 @@ class CombinedModel(nn.Module):
         )
 
         # Forward pass through the graph model
-        device = graph.x.device
-        batch = torch.zeros(graph.num_nodes, dtype=torch.long, device=device)
+        # device = graph.x.device
+        # batch = torch.zeros(graph.num_nodes, dtype=torch.long, device=device)
 
         # For the teacher model, use torch.no_grad()
-        if not is_student:
-            with torch.no_grad():
-                node_embeddings, global_embedding = self.graph_model(
-                    graph.x, graph.edge_index, batch
-                )
-        else:
-            node_embeddings, global_embedding = self.graph_model(
-                graph.x, graph.edge_index, batch
-            )
+        # if not is_student:
+        #     with torch.no_grad():
+        #         node_embeddings, global_embedding = self.graph_model(
+        #             graph.x, graph.edge_index, batch
+        #         )
+        # else:
+        #     node_embeddings, global_embedding = self.graph_model(
+        #         graph.x, graph.edge_index, batch
+        #     )
 
-        return (output, node_embeddings, global_embedding, graph, sims_knn_local, indices_knn_local, feats_local)
+        return (output, head_output, graph, sims_knn_local, indices_knn_local, feats_local) #, node_embeddings, global_embedding
 
 
 def update_graph(output, indices_local, features, graph, teacher_nn_matrix_cpu_flag, requires_grad, args):

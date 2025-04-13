@@ -16,3 +16,4 @@ Results/
 runs/
 Eval_Results/
 saved_graphs/
+*.pth

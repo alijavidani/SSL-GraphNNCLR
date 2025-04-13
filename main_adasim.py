@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] ="0,1,2"
+os.environ["CUDA_VISIBLE_DEVICES"] ="2"
 
 import torch
 import argparse
@@ -96,7 +96,7 @@ def train_adasim(args):
 
     torch.distributed.barrier()
 
-    index_label_int = make_index_label(args, transform)
+    # index_label_int = make_index_label(args, transform)
 
     dataset = DatasetFolderAdaSim(args.data_path, args, transform=transform, return_index_instead_of_target=True)
     sampler = torch.utils.data.DistributedSampler(dataset, shuffle=True)
@@ -160,18 +160,18 @@ def train_adasim(args):
         print(f"Unknow architecture: {args.arch}")
 
     # multi-crop wrapper handles forward with inputs of different resolutions
-    # student = utils.MultiCropWrapper(student, DINOHead(
-    #     embed_dim,
-    #     args.out_dim,
-    #     use_bn=args.use_bn_in_head,
-    #     norm_last_layer=args.norm_last_layer,
-    # ))
-    # teacher = utils.MultiCropWrapper(
-    #     teacher,
-    #     DINOHead(embed_dim, args.out_dim, args.use_bn_in_head),
-    # )
-    student = utils.MultiCropWrapper(student)
-    teacher = utils.MultiCropWrapper(teacher)
+    student = utils.MultiCropWrapper(student, DINOHead(
+        embed_dim,
+        args.out_dim,
+        use_bn=args.use_bn_in_head,
+        norm_last_layer=args.norm_last_layer,
+    ))
+    teacher = utils.MultiCropWrapper(
+        teacher,
+        DINOHead(embed_dim, args.out_dim, args.use_bn_in_head),
+    )
+    # student = utils.MultiCropWrapper(student)
+    # teacher = utils.MultiCropWrapper(teacher)
     # move networks to gpu
     student, teacher = student.cuda(), teacher.cuda()
     # synchronize batch norms (if any)
@@ -201,53 +201,53 @@ def train_adasim(args):
     num_layers = len(hidden_dims)        # Number of GNN layers
 
     # Create DINOHead instance
-    student_dino_head = DINOHead(
-        in_dim = hidden_dims[-1],
-        out_dim = args.out_dim,
-        use_bn = args.use_bn_in_head,
-        norm_last_layer = args.norm_last_layer,
-    )
+    # student_dino_head = DINOHead(
+    #     in_dim = hidden_dims[-1],
+    #     out_dim = args.out_dim,
+    #     use_bn = args.use_bn_in_head,
+    #     norm_last_layer = args.norm_last_layer,
+    # )
 
-    teacher_dino_head = DINOHead(
-        in_dim = hidden_dims[-1],
-        out_dim = args.out_dim,
-        use_bn = args.use_bn_in_head,
-        norm_last_layer = args.norm_last_layer,
-    )
+    # teacher_dino_head = DINOHead(
+    #     in_dim = hidden_dims[-1],
+    #     out_dim = args.out_dim,
+    #     use_bn = args.use_bn_in_head,
+    #     norm_last_layer = args.norm_last_layer,
+    # )
 
     # Student graph model
-    student_graph_model = GraphNetWithDINO(input_dim, hidden_dims, num_layers, student_dino_head).cuda()
+    # student_graph_model = GraphNetWithDINO(input_dim, hidden_dims, num_layers, student_dino_head).cuda()
 
     # Teacher graph model
-    teacher_graph_model = GraphNetWithDINO(input_dim, hidden_dims, num_layers, teacher_dino_head).cuda()
+    # teacher_graph_model = GraphNetWithDINO(input_dim, hidden_dims, num_layers, teacher_dino_head).cuda()
 
     # Synchronize batch norms (if any)
-    if utils.has_batchnorms(student_graph_model):
-        student_graph_model = nn.SyncBatchNorm.convert_sync_batchnorm(student_graph_model)
-        teacher_graph_model = nn.SyncBatchNorm.convert_sync_batchnorm(teacher_graph_model)
+    # if utils.has_batchnorms(student_graph_model):
+    #     student_graph_model = nn.SyncBatchNorm.convert_sync_batchnorm(student_graph_model)
+    #     teacher_graph_model = nn.SyncBatchNorm.convert_sync_batchnorm(teacher_graph_model)
 
-        # Wrap models with DDP
-        student_graph_model = nn.parallel.DistributedDataParallel(student_graph_model, device_ids=[args.gpu])
-        teacher_graph_model = nn.parallel.DistributedDataParallel(teacher_graph_model, device_ids=[args.gpu])
-        teacher_graph_model_without_ddp = teacher_graph_model.module
-    else:
-        student_graph_model = nn.parallel.DistributedDataParallel(student_graph_model, device_ids=[args.gpu])
-        teacher_graph_model_without_ddp = teacher_graph_model
+    #     # Wrap models with DDP
+    #     student_graph_model = nn.parallel.DistributedDataParallel(student_graph_model, device_ids=[args.gpu])
+    #     teacher_graph_model = nn.parallel.DistributedDataParallel(teacher_graph_model, device_ids=[args.gpu])
+    #     teacher_graph_model_without_ddp = teacher_graph_model.module
+    # else:
+    #     student_graph_model = nn.parallel.DistributedDataParallel(student_graph_model, device_ids=[args.gpu])
+    #     teacher_graph_model_without_ddp = teacher_graph_model
 
     # Initialize the teacher graph model with the student's parameters
-    teacher_graph_model_without_ddp.load_state_dict(student_graph_model.module.state_dict())
+    # teacher_graph_model_without_ddp.load_state_dict(student_graph_model.module.state_dict())
 
     # Freeze teacher graph model parameters
-    for p in teacher_graph_model.parameters():
-        p.requires_grad = False
+    # for p in teacher_graph_model.parameters():
+    #     p.requires_grad = False
 
     # teacher_graph_model.eval()
 
     print("Student Graph Model and Teacher Graph Model are built and wrapped with DDP.")
 
     # Create student and teacher instances
-    student_combined_model = CombinedModel(student, student_graph_model, args)
-    teacher_combined_model = CombinedModel(teacher, teacher_graph_model, args)
+    student_combined_model = CombinedModel(student, args) #, student_graph_model
+    teacher_combined_model = CombinedModel(teacher, args) #, teacher_graph_model
 
     # Freeze teacher graph model parameters
     for p in teacher_combined_model.parameters():
@@ -325,6 +325,7 @@ def train_adasim(args):
     # ============ preparing loss ... ============
     adasim_loss = AdaSimLoss(
         args.out_dim,
+        embed_dim,
         2,  # total number of crops = 2 global crops
         args.warmup_teacher_temp,
         args.teacher_temp,
@@ -397,8 +398,8 @@ def train_adasim(args):
             run_variables=to_restore,
             student=student,
             teacher=teacher,
-            student_graph_model=student_graph_model,
-            teacher_graph_model=teacher_graph_model,
+            # student_graph_model=student_graph_model,
+            # teacher_graph_model=teacher_graph_model,
             student_combined_model=student_combined_model,
             teacher_combined_model=teacher_combined_model,
             optimizer=optimizer,
@@ -412,8 +413,8 @@ def train_adasim(args):
             run_variables=to_restore,
             student=student,
             teacher=teacher,
-            student_graph_model=student_graph_model,
-            teacher_graph_model=teacher_graph_model,
+            # student_graph_model=student_graph_model,
+            # teacher_graph_model=teacher_graph_model,
             student_combined_model=student_combined_model,
             teacher_combined_model=teacher_combined_model,
             optimizer=optimizer,
@@ -485,7 +486,7 @@ def train_adasim(args):
             # ============ training one epoch of DINO ... ============
 
             train_stats = train_one_epoch(student_combined_model, teacher_combined_model, student, teacher,\
-                                        teacher_without_ddp, student_graph_model, teacher_graph_model, teacher_graph_model_without_ddp, adasim_loss,
+                                        teacher_without_ddp, adasim_loss, #, student_graph_model, teacher_graph_model, teacher_graph_model_without_ddp
                                         data_loader, optimizer, lr_schedule, wd_schedule, momentum_schedule, graph_momentum_schedule,
                                         epoch, fp16_scaler, teacher_features, teacher_nn_tensor, teacher_sim_tensor, bootstrap_myself_tensor,
                                         teacher_graph, args, student_features, student_nn_tensor, student_sim_tensor, student_graph, teacher_nn_matrix_cpu_flag)
@@ -513,8 +514,8 @@ def train_adasim(args):
         save_dict = {
             'student': student.state_dict(),
             'teacher': teacher.state_dict(),            
-            'teacher_graph_model': teacher_graph_model.state_dict(),
-            'student_graph_model': student_graph_model.state_dict(),
+            # 'teacher_graph_model': teacher_graph_model.state_dict(),
+            # 'student_graph_model': student_graph_model.state_dict(),
             'teacher_combined_model': teacher_combined_model.state_dict(),
             'student_combined_model': student_combined_model.state_dict(),
             'optimizer': optimizer.state_dict(),
@@ -551,12 +552,16 @@ def train_adasim(args):
                          'nn_accuracy_top1': get_nn_acuracy(dataset, teacher_nn_tensor_cpu[:, 0]),
                          'nn_accuracy_top2': get_nn_acuracy(dataset, teacher_nn_tensor_cpu[:, 1]),
                          'nn_self_accuracy_top1': get_nn_self_accuracy(teacher_nn_tensor_cpu[:, 0]),
-                         'nn_self_accuracy_top2': get_nn_self_accuracy(teacher_nn_tensor_cpu[:, 1]),
+                         'teacher_overall_neighbors_accuracy': get_overall_neighbors_accuracy(1300, max_edges_per_node, teacher_graph.edge_index[1,:num_nodes*max_edges_per_node]),
+                         'student_overall_neighbors_accuracy': get_overall_neighbors_accuracy(1300, max_edges_per_node, student_graph.edge_index[1,:num_nodes*max_edges_per_node]),
+                        #  'nn_self_accuracy_top2': get_nn_self_accuracy(teacher_nn_tensor_cpu[:, 1]),
                          'nn_ratio_self': bootstrap_myself_tensor.sum().item() / len(bootstrap_myself_tensor)}
             writer.add_scalar('nn_accuracy_top1', log_stats['nn_accuracy_top1'], epoch)
             writer.add_scalar('nn_accuracy_top2', log_stats['nn_accuracy_top2'], epoch)
             writer.add_scalar('nn_self_accuracy_top1', log_stats['nn_self_accuracy_top1'], epoch)
-            writer.add_scalar('nn_self_accuracy_top2', log_stats['nn_self_accuracy_top2'], epoch)
+            writer.add_scalar('teacher_overall_neighbors_accuracy', log_stats['teacher_overall_neighbors_accuracy'], epoch)
+            writer.add_scalar('student_overall_neighbors_accuracy', log_stats['student_overall_neighbors_accuracy'], epoch)
+            # writer.add_scalar('nn_self_accuracy_top2', log_stats['nn_self_accuracy_top2'], epoch)
             writer.add_scalar('nn_ratio_self', log_stats['nn_ratio_self'], epoch)
         if utils.is_main_process():
             with (Path(args.output_dir) / "log.txt").open("a") as f:
@@ -566,6 +571,66 @@ def train_adasim(args):
     print('Training time {}'.format(total_time_str))
     # print(f"Number of edges in the teacher graph: {teacher_graph.edge_index.size(1)}")
     # print(f"Number of edges in the student graph: {student_graph.edge_index.size(1)}")
+
+
+    # Example Parameters
+    # number_of_samples_per_class = 50
+    # max_edges_per_node = 10
+    # total_samples = 2500
+
+    # # Simulate nearest neighbor indices
+    # nearest_neighbor = torch.randint(0, total_samples, (total_samples * max_edges_per_node,))
+    # nn_accuracy(1300,max_edges_per_node, teacher_graph.edge_index[1,:])
+
+    # Calculate NN Accuracy
+    # accuracy = get_overall_neighbors_accuracy(1300, max_edges_per_node, teacher_graph.edge_index[1,:num_nodes*max_edges_per_node])
+
+def get_overall_neighbors_accuracy(number_of_samples_per_class: int, max_edges_per_node: int, nearest_neighbor: torch.Tensor):
+    """
+    Calculates the nearest neighbor accuracy based on sample-class alignment and provided nearest neighbors.
+    
+    Args:
+        number_of_samples_per_class (int): Number of samples in each class.
+        max_edges_per_node (int): Maximum number of nearest neighbors per sample.
+        nearest_neighbor (torch.Tensor): Precomputed nearest neighbors as a 1D tensor.
+    
+    Returns:
+        float: Nearest neighbor accuracy.
+    """
+    # Total number of samples
+    total_samples = nearest_neighbor.size(0) // max_edges_per_node
+    
+    # Validate nearest_neighbor dimensions
+    if nearest_neighbor.numel() % max_edges_per_node != 0:
+        raise ValueError("nearest_neighbor size must be divisible by max_edges_per_node.")
+    
+    # Create a tensor representing the samples
+    samples = torch.arange(total_samples)
+    
+    # Class index for each sample
+    sample_classes = samples // number_of_samples_per_class  # Class for each sample
+    
+    # Expand sample_classes to match nearest_neighbor structure
+    sample_classes_expanded = sample_classes.repeat_interleave(max_edges_per_node)
+    
+    # Determine class index for each nearest neighbor
+    nn_classes = nearest_neighbor // number_of_samples_per_class  # Class index for neighbors
+    nn_classes = nn_classes.cpu()
+    # Compare if nearest neighbor classes match the sample's class
+    correct_neighbors = (nn_classes == sample_classes_expanded)
+    
+    # Reshape to [total_samples, max_edges_per_node] and count correct neighbors
+    correct_neighbors = correct_neighbors.view(total_samples, max_edges_per_node)
+    correct_counts = correct_neighbors.sum(dim=1)
+    
+    # Calculate accuracy
+    nn_accuracy = correct_counts.float().mean() / max_edges_per_node
+    
+    print(f"Total Samples: {total_samples}")
+    print(f"Correct Neighbors per Node (avg): {correct_counts.float().mean().item()}")
+    print(f"Nearest Neighbor Accuracy: {nn_accuracy.item() * 100:.2f}%")
+    
+    return nn_accuracy.item()
 
 def get_nn_acuracy(dataset, nn_tensor):
     t = torch.Tensor(dataset.targets)
@@ -653,7 +718,7 @@ def update_graph_from_model_multi_gpu(images, indices, model, features, graph, l
     """
 
     # === 1. Forward Pass ===
-    output = model(images)  # shape: [2, batch_size, feat_dim]
+    output, _ = model(images)  # shape: [2, batch_size, feat_dim]
     feats = F.normalize(output.reshape(2, -1, output.shape[-1]), p=2, dim=-1)
     if args.nn_rep_type == "mean":
         feats = feats.mean(dim=0)
@@ -838,7 +903,7 @@ def update_test_graphs(data_loader_test, epoch, len_train, student, teacher, tea
     return teacher_graph_test, student_graph_test
 
 
-def train_one_epoch(student_combined_model, teacher_combined_model, student, teacher, teacher_without_ddp, student_graph_model, teacher_graph_model, teacher_graph_model_without_ddp, adasim_loss, data_loader,
+def train_one_epoch(student_combined_model, teacher_combined_model, student, teacher, teacher_without_ddp, adasim_loss, data_loader, #, student_graph_model, teacher_graph_model, teacher_graph_model_without_ddp
                     optimizer, lr_schedule, wd_schedule, momentum_schedule, graph_momentum_schedule, epoch, fp16_scaler,
                     teacher_features, teacher_nn_tensor, teacher_sim_tensor, bootstrap_myself_tensor, teacher_graph, args,
                     student_features, student_nn_tensor, student_sim_tensor, student_graph, teacher_nn_matrix_cpu_flag):
@@ -864,26 +929,28 @@ def train_one_epoch(student_combined_model, teacher_combined_model, student, tea
         # teacher and student forward passes + compute dino loss
         with torch.cuda.amp.autocast(fp16_scaler is not None):
             # Forward pass through teacher model
-            teacher_output, teacher_node_embeddings, teacher_global_embedding, teacher_graph, teacher_sims_knn_local,\
+            teacher_output, teacher_head_output, teacher_graph, teacher_sims_knn_local,\
                 teacher_indices_knn_local, teacher_feats_local = teacher_combined_model(
                 images, indices, same_im_bool, teacher_features, teacher_nn_tensor,
                 teacher_sim_tensor, bootstrap_myself_tensor, teacher_graph,
                 teacher_nn_matrix_cpu_flag, is_student=False, fp16_scaler=fp16_scaler
             )
+            # , teacher_node_embeddings, teacher_global_embedding
 
             # Forward pass through student model
-            student_output, student_node_embeddings, student_global_embedding, student_graph, student_sims_knn_local, \
+            student_output, student_head_output, student_graph, student_sims_knn_local, \
                 student_indices_knn_local, student_feats_local = student_combined_model(
                 images, indices, same_im_bool, student_features, student_nn_tensor,
                 student_sim_tensor, bootstrap_myself_tensor, student_graph,
                 teacher_nn_matrix_cpu_flag, is_student=True, fp16_scaler=fp16_scaler
             )
+            #, student_node_embeddings, student_global_embedding
 
             # Compute loss
             loss = adasim_loss(
-                student_output, teacher_output, epoch, it,
-                teacher_node_embeddings, teacher_global_embedding,
-                student_node_embeddings, student_global_embedding,
+                student_head_output, teacher_head_output, epoch, it,
+                # teacher_node_embeddings, teacher_global_embedding,
+                # student_node_embeddings, student_global_embedding,
                 indices  # Passing indices as indices_batch_all
             )
         
@@ -937,9 +1004,9 @@ def train_one_epoch(student_combined_model, teacher_combined_model, student, tea
                 param_k.data.mul_(m).add_((1 - m) * param_q.detach().data)
 
             # EMA update for the teacher graph model
-            m_graph = graph_momentum_schedule[it]  # momentum parameter for graph networks
-            for param_q, param_k in zip(student_graph_model.module.parameters(), teacher_graph_model_without_ddp.parameters()):
-                param_k.data.mul_(m_graph).add_((1 - m_graph) * param_q.detach().data)
+            # m_graph = graph_momentum_schedule[it]  # momentum parameter for graph networks
+            # for param_q, param_k in zip(student_graph_model.module.parameters(), teacher_graph_model_without_ddp.parameters()):
+            #     param_k.data.mul_(m_graph).add_((1 - m_graph) * param_q.detach().data)
                 
 
         update_state(teacher_feats_local, indices, teacher_sims_knn_local, teacher_indices_knn_local, teacher_features, teacher_nn_tensor, teacher_sim_tensor, same_im_bool, bootstrap_myself_tensor,

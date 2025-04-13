@@ -8,16 +8,16 @@ from graph import GraphNet
 # from main_adasim import writer
 
 class AdaSimLoss(nn.Module):
-    def __init__(self, out_dim, ncrops, warmup_teacher_temp, teacher_temp,
+    def __init__(self, out_dim, embed_dim, ncrops, warmup_teacher_temp, teacher_temp,
                  warmup_teacher_temp_epochs, nepochs, student_temp=0.1,
                  center_momentum=0.9, args=None, writer=None):
         super().__init__()
         self.student_temp = student_temp
         self.center_momentum = center_momentum
         self.ncrops = ncrops
-        self.register_buffer("center", torch.zeros(1, 768)) # Note
-        self.register_buffer("node_center", torch.zeros(1, out_dim))
-        self.register_buffer("global_center", torch.zeros(1, out_dim))
+        self.register_buffer("center", torch.zeros(1, out_dim)) # Note
+        # self.register_buffer("node_center", torch.zeros(1, embed_dim))
+        # self.register_buffer("global_center", torch.zeros(1, embed_dim))
 
         # Warm-up for teacher temperature
         self.teacher_temp_schedule = np.concatenate((
@@ -28,8 +28,8 @@ class AdaSimLoss(nn.Module):
         self.writer = writer
 
     def forward(self, student_output, teacher_output, epoch, it,
-                teacher_node_embeddings, teacher_global_embedding,
-                student_node_embeddings, student_global_embedding,
+                # teacher_node_embeddings, teacher_global_embedding,
+                # student_node_embeddings, student_global_embedding,
                 indices):
         """
         Cross-entropy between softmax outputs of the teacher and student networks
@@ -68,12 +68,16 @@ class AdaSimLoss(nn.Module):
         # total_loss += gc_local_loss #+ gc_local_loss2 # gc_global_loss +
 
         # 4. Update center
-        self.update_centers(teacher_output, teacher_node_embeddings, teacher_global_embedding)
+        self.update_centers(teacher_output,
+                            #  teacher_node_embeddings, teacher_global_embedding
+                        )
 
         return total_loss
 
     @torch.no_grad()
-    def update_centers(self, teacher_output, teacher_node_embeddings, teacher_global_embedding):
+    def update_centers(self, teacher_output,
+                        # teacher_node_embeddings, teacher_global_embedding
+                        ):
         """
         Update center used for teacher output.
         """
@@ -84,16 +88,16 @@ class AdaSimLoss(nn.Module):
         self.center = self.center * self.center_momentum + batch_center * (1 - self.center_momentum)
 
         # Update node center
-        batch_node_center = teacher_node_embeddings.mean(dim=0, keepdim=True)
-        dist.all_reduce(batch_node_center)
-        batch_node_center = batch_node_center / dist.get_world_size()
-        self.node_center = self.node_center * self.center_momentum + batch_node_center * (1 - self.center_momentum)
+        # batch_node_center = teacher_node_embeddings.mean(dim=0, keepdim=True)
+        # dist.all_reduce(batch_node_center)
+        # batch_node_center = batch_node_center / dist.get_world_size()
+        # self.node_center = self.node_center * self.center_momentum + batch_node_center * (1 - self.center_momentum)
 
-        # Update global center
-        batch_global_center = teacher_global_embedding.mean(dim=0, keepdim=True)
-        dist.all_reduce(batch_global_center)
-        batch_global_center = batch_global_center / dist.get_world_size()
-        self.global_center = self.global_center * self.center_momentum + batch_global_center * (1 - self.center_momentum)
+        # # Update global center
+        # batch_global_center = teacher_global_embedding.mean(dim=0, keepdim=True)
+        # dist.all_reduce(batch_global_center)
+        # batch_global_center = batch_global_center / dist.get_world_size()
+        # self.global_center = self.global_center * self.center_momentum + batch_global_center * (1 - self.center_momentum)
 
 
     def adasim_loss(self, student_output, teacher_output, epoch):
