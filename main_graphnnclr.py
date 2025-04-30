@@ -40,7 +40,7 @@ import networkx as nx
 from torch_geometric.utils import from_networkx
 # import cudf
 # import cugraph
-from my_functions import *
+from datasets_properties.my_functions import *
 from graph import *
 from torch_geometric.data import Data
 from augmentation import DataAugmentationDINO, DataAugmentationDINO2

@@ -1,47 +1,58 @@
-# AdaSim
-[[`arXiv`](https://arxiv.org/abs/2303.13606)]
-
-This repo contains the Pytorch implementation of our ICCV 2023 paper:
-> [**Adaptive Similarity Bootstrapping for Self-Distillation based Representation Learning**](https://arxiv.org/pdf/2303.13245.pdf)
->
-> [Tim Lebailly*](https://www.timlebailly.com/), [Thomas Stegmüller*](https://people.epfl.ch/thomas.stegmuller?lang=en), [Behzad Bozorgtabar](https://behzadbozorgtabar.com/), [Tinne Tuytelaars](https://homes.esat.kuleuven.be/~tuytelaa/), and [Jean-Philippe Thiran](https://people.epfl.ch/jean-philippe.thiran).
-
-
-![alt text](fig/adasim.jpg)
+# SSL-GraphNNCLR
 
 ## Dependencies
-Our code only has a few dependencies. First, install PyTorch for your machine following [https://pytorch.org/get-started/locally/](https://pytorch.org/get-started/locally/).
-Then, install other needed dependencies:
+Install all required dependencies using the requirements file:
 ```bash
-pip install einops
+pip install -r requirements.txt
 ```
 
-## Pretraining
-### Single GPU pretraining
-Run the [main_adasim.py](main_adasim.py) file. Command line args are defined in [parser.py](adasim_utils/parser.py).
+## Project Structure
+The project consists of three main components:
+1. **Pretraining and Graph Construction** - Create teacher and student graphs
+2. **Representation Refinement** - Refine node representations using the constructed graphs
+3. **Visualization** - Visualize the results and analyze the refined representations
+
+## Pretraining and Graph Construction
+To pretrain the model and construct teacher and student graphs, use the `main_graphnnclr.py` script:
+
 ```bash
-python main_adasim.py --args1 val1
+# For single GPU
+python main_graphnnclr.py
+
+# For multi-GPU training (e.g., 4 GPUs)
+torchrun --nproc_per_node=4 main_graphnnclr.py
 ```
 
-**Make sure to use the right arguments specified in the table below!**
+This step constructs both teacher and student graphs based on representations learned in the pretraining phase.
 
-### 1 node pretraining
+## Representation Refinement
+The representation refinement phase is implemented in the `SelfGNN` folder. The script takes various arguments defined in `utils.py` and refines the node representations using graph neural networks:
+
 ```bash
-python -m torch.distributed.launch --nproc_per_node=8 main_adasim.py --args1 val1
+cd SelfGNN
+python src/train_graph.py
 ```
 
-## Citation
-If you find our work useful, please consider citing:
+## Visualization
+The visualization code provides two main functionalities:
 
-```
-@article{lebailly2023adaptive,
-  title={Adaptive Similarity Bootstrapping for Self-Distillation},
-  author={Lebailly, Tim and Stegm{\"u}ller, Thomas and Bozorgtabar, Behzad and Thiran, Jean-Philippe and Tuytelaars, Tinne},
-  journal={arXiv preprint arXiv:2303.13606},
-  year={2023}
-}
-```
+1. **2-Hop Graph Visualization**: Generates visualizations of 2-hop neighborhoods for specific reference nodes. It draws black borders for correct neighbors (same class as the reference node) and red borders for incorrect neighbors.
+
+2. **Dimensionality Reduction Visualization**: Creates t-SNE and UMAP projections to visualize how the latent space changes before and after representation refinement.
+
+## Visualization Results
+
+### 2-Hop Graph Visualizations
+These visualizations show the 2-hop neighborhood around reference nodes. Nodes with black borders share the same class as the reference node, while nodes with red borders belong to different classes.
+
+![2-Hop Graph Node 13100](./Visualization/Show_Results/2hop_node13100.png)
+![2-Hop Graph Node 14200](./Visualization/Show_Results/2hop_node14200.png)
+
+### Dimensionality Reduction Visualizations
+These visualizations show how the latent space is transformed before and after representation refinement:
+
+![t-SNE Comparison](./Visualization/Show_Results/comparison_2d_tsne.png)
+![UMAP Comparison](./Visualization/Show_Results/comparison_2d_umap.png)
 
 ## Acknowledgments
-
-This code is adapted from [DINO](https://github.com/facebookresearch/dino).
+This work builds upon several open-source projects, including [DINO](https://github.com/facebookresearch/dino) and [AdaSim](https://github.com/timtheenchanter/adasim).

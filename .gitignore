@@ -5,15 +5,9 @@ data/
 CiteSeer/
 *.pyc
 \__pycache__\*
-dino_cifar10/
-dino_cifar10_2/
-dino_cifar10_3/
-dino_cifar10_4/
-dino_cifar10_5/
-output_cifar10/
-dino_cifar10_5_converge/
 Results/
 runs/
 Eval_Results/
 saved_graphs/
 *.pth
+datasets_properties/
