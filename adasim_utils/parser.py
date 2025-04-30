@@ -23,12 +23,12 @@ def get_args_parser():
                         choices=['vit_tiny', 'vit_small', 'vit_base', 'xcit', 'deit_tiny', 'deit_small', 'resnet50'],
                         help="""Name of architecture to train. For quick experiments with ViTs,
         we recommend using vit_tiny or vit_small.""")
-    parser.add_argument('--patch_size', default=8, type=int, help="""Size in pixels
+    parser.add_argument('--patch_size', default=16, type=int, help="""Size in pixels
         of input square patches - default 16 (for 16x16 patches). Using smaller
         values leads to better performance but requires more memory. Applies only
         for ViTs (vit_tiny, vit_small and vit_base). If <16, we recommend disabling
         mixed precision training (--use_fp16 false) to avoid unstabilities.""")
-    parser.add_argument('--out_dim', default=65536, type=int, help="""Dimensionality of
+    parser.add_argument('--out_dim', default=10000, type=int, help="""Dimensionality of
         the DINO head output. For complex and large datasets large values (like 65k) work well.""")
     parser.add_argument('--norm_last_layer', default=True, type=bool_flag,
                         help="""Whether or not to weight normalize the last layer of the DINO head.
@@ -66,7 +66,7 @@ def get_args_parser():
     parser.add_argument('--clip_grad', type=float, default=3.0, help="""Maximal parameter
         gradient norm if using gradient clipping. Clipping with norm .3 ~ 1.0 can
         help optimization for larger ViT architectures. 0 for disabling.""")
-    parser.add_argument('--batch_size_per_gpu', default=6, type=int,
+    parser.add_argument('--batch_size_per_gpu', default=2, type=int,
                         help='Per-GPU batch-size : number of distinct images loaded on one GPU.')
     parser.add_argument('--epochs', default=100, type=int, help='Number of epochs of training.')
     parser.add_argument('--freeze_last_layer', default=1, type=int, help="""Number of epochs
@@ -97,9 +97,9 @@ def get_args_parser():
         Used for small local view cropping of multi-crop.""")
 
     # Misc
-    parser.add_argument('--data_path', default='/home/alij/Datasets/ImageNet100', type=str,
+    parser.add_argument('--data_path', default='/amin/imagenet/imagenet', type=str,
                         help='Please specify path to the ImageNet training data.')
-    parser.add_argument('--output_dir', default="./Results/Adasim-ImageNet100/vitb8", type=str, help='Path to save logs and checkpoints.')
+    parser.add_argument('--output_dir', default="/amin/alij_cache/RESULTS/ImageNet/SSL-GraphNNCLR/Adasim-ImageNet1K/vitb16", type=str, help='Path to save logs and checkpoints.')
     parser.add_argument('--saveckp_freq', default=20, type=int, help='Save checkpoint every x epochs.')
     parser.add_argument('--seed', default=0, type=int, help='Random seed.')
     parser.add_argument('--num_workers', default=8, type=int, help='Number of data loading workers per GPU.')
@@ -110,14 +110,33 @@ def get_args_parser():
     # AdaSim extra arguments
     parser.add_argument('--start_checkpoint_path', default='', type=str, help="""Start training from a checkpoint 
         at arbitrary location if the output folder is empty.""")
-    parser.add_argument('--untar_path', default='/home/alij/Datasets/ImageNet100', type=str)
+    parser.add_argument('--untar_path', default='/amin/imagenet/imagenet', type=str)
     parser.add_argument('--nn_rep_type', default='first', type=str,
                         choices=['first', 'second', 'mean'],
                         help="""Which representation to use for choosing the nearset neighboor.""")
     parser.add_argument('--topk', type=int, default=3, help="""How many to NN to keep track of.""")
-    parser.add_argument('--vote_nn_nb', type=int, default=15,
+    parser.add_argument('--vote_nn_nb', type=int, default=10,
                         help="""Number of votes from previous epoch to select the nearest neighbor.""")
     parser.add_argument('--sampling_softmax_temp', default=0.2, type=float,
                         help="""Softmax temperature for sampling distribution of NN.""")
     parser.add_argument('--edges_per_node', type=int, default=1, help="""How many edges per node for teacher and student graphs.""")
+    
+    # Add memory mapping arguments
+    parser.add_argument('--use_memmap', type=bool_flag, default=False, 
+                        help="Use memory mapping for large tensors to reduce RAM usage")
+    parser.add_argument('--memmap_dir', default='memmap_storage', type=str,
+                        help="Directory to store memory-mapped files")
+    parser.add_argument('--memmap_batch_size', type=int, default=10,
+                        help="Batch size for processing memory-mapped tensors")
+    parser.add_argument('--convert_checkpoint', type=bool_flag, default=False,
+                        help="Convert existing checkpoint to use memory mapping")
+    parser.add_argument('--checkpoint_path', type=str, default='',
+                        help="Path to checkpoint to convert to memory mapping")
+    parser.add_argument('--keep_in_ram', type=bool_flag, default=False,
+                        help="Keep the original tensors in RAM after converting to memory maps")
+    parser.add_argument('--memmap_sync_frequency', type=int, default=1,
+                        help="How often (in epochs) to sync memmap files to disk")
+    parser.add_argument('--memmap_async_save', type=bool_flag, default=False,
+                        help="Use asynchronous saving for memory maps")
+    
     return parser
