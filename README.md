@@ -51,8 +51,11 @@ These visualizations show the 2-hop neighborhood around reference nodes. Nodes w
 ### Dimensionality Reduction Visualizations
 These visualizations show how the latent space is transformed before and after representation refinement:
 
+#### t-SNE Visualization: Before vs. After Representation Refinement
 ![t-SNE Comparison](./Visualization/Show_Results/comparison_2d_tsne.png)
+
+#### UMAP Visualization: Before vs. After Representation Refinement
 ![UMAP Comparison](./Visualization/Show_Results/comparison_2d_umap.png)
 
 ## Acknowledgments
-This work builds upon several open-source projects, including [DINO](https://github.com/facebookresearch/dino) and [AdaSim](https://github.com/timtheenchanter/adasim).
+This work builds upon several open-source projects, including [DINO](https://github.com/facebookresearch/dino) and [AdaSim](https://github.com/tileb1/AdaSim/).
