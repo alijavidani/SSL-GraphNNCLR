@@ -58,4 +58,4 @@ These visualizations show how the latent space is transformed before and after r
 ![UMAP Comparison](./Visualization/Show_Results/comparison_2d_umap.png)
 
 ## Acknowledgments
-This work builds upon several open-source projects, including [DINO](https://github.com/facebookresearch/dino) and [AdaSim](https://github.com/tileb1/AdaSim/).
+This work builds upon several open-source projects, including [DINO](https://github.com/facebookresearch/dino), [AdaSim](https://github.com/tileb1/AdaSim/), and [SelfGNN](https://github.com/zekarias-tilahun/SelfGNN).
