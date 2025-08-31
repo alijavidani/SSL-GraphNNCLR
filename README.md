@@ -11,6 +11,7 @@ The project consists of three main components:
 1. **Pretraining and Graph Construction** - Create teacher and student graphs
 2. **Representation Refinement** - Refine node representations using the constructed graphs
 3. **Visualization** - Visualize the results and analyze the refined representations
+4. **Memory Consumption** – Analyze memory requirements for node and edge storage.
 
 ## Pretraining and Graph Construction
 To pretrain the model and construct teacher and student graphs, use the `main_graphnnclr.py` script:
@@ -56,6 +57,29 @@ These visualizations show how the latent space is transformed before and after r
 
 #### UMAP Visualization: Before vs. After Representation Refinement
 ![UMAP Comparison](./Visualization/Show_Results/comparison_2d_umap.png)
+
+## Memory Consumption
+We provide here an estimate of the memory requirements associated with graph construction and storage.
+
+* Node Memory Complexity
+O(N × d × 4B)
+where N is the number of samples (train + test), d is the feature dimensionality before the projector, and 4B corresponds to float32 storage. This term represents the dominant cost, as it stores the cached feature matrix.
+
+* Edge Memory Complexity
+O(2 × N × k × w × 4B)
+where k is the number of nearest neighbors per node, w is the number of recent epochs for which neighbor lists are maintained, and the factor 2 accounts for storing both source and destination indices as 32-bit integers.
+
+In practice, the edge term is negligible compared to the node term, since k is typically very small (1–5) and w is moderate (5–15).
+
+Example: ImageNet-1K (N ≈ 1.3M)
+
+* ViT-Base (d = 768) → ~3.72 GB
+
+* ViT-Small (d = 384) → ~1.86 GB
+
+* ViT-Tiny (d = 192) → ~0.93 GB
+
+Since AdaSim already requires a cache of size O(N × d × 4B) for the teacher stream, our method simply maintains an additional cache for the student stream. For ImageNet-1K with ViT-Base, this corresponds to an additional ~3.72 GB, which remains practical on modern hardware.
 
 ## Acknowledgments
 This work builds upon several open-source projects, including [DINO](https://github.com/facebookresearch/dino), [AdaSim](https://github.com/tileb1/AdaSim/), and [SelfGNN](https://github.com/zekarias-tilahun/SelfGNN).
