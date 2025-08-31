@@ -45,7 +45,7 @@ The visualization code provides two main functionalities:
 ### 2-Hop Graph Visualizations
 These visualizations show the 2-hop neighborhood around reference nodes. Nodes with black borders share the same class as the reference node, while nodes with red borders belong to different classes.
 
-![2-Hop Graph Node 13100](./Visualization/Show_Results/2hop_node13100.png)
+![2-Hop Graph Node 13100](./Visualization/Show_Results/2hop_node6510.png)
 ![2-Hop Graph Node 14200](./Visualization/Show_Results/2hop_node14200.png)
 
 ### Dimensionality Reduction Visualizations
